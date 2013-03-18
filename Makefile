@@ -3,13 +3,13 @@
 #solaris and perhaps other very weirdass /bin/sh
 #SHELL="/bin/ksh"
 
-DB_TYPE = Pg
-#DB_TYPE = mysql
+#DB_TYPE = Pg
+DB_TYPE = mysql
 
 DB_USER = freeside
-DB_PASSWORD=
+DB_PASSWORD=test
 
-DATASOURCE = DBI:${DB_TYPE}:dbname=freeside
+DATASOURCE = DBI:${DB_TYPE}:dbname=freeside;host=casmysql.alpha.bluehost.com
 
 #changable now (some things which should go to the others still go to CONF)
 FREESIDE_CONF = /usr/local/etc/freeside
@@ -27,9 +27,9 @@ MASONDATA = ${FREESIDE_CACHE}/masondata
 DIST_CONF = ${FREESIDE_CONF}/default_conf
 
 #deb
-FREESIDE_DOCUMENT_ROOT = /var/www/freeside
+#FREESIDE_DOCUMENT_ROOT = /var/www/freeside
 #redhat, fedora, mandrake
-#FREESIDE_DOCUMENT_ROOT = /var/www/html/freeside
+FREESIDE_DOCUMENT_ROOT = /var/www/html/freeside
 #freebsd
 #FREESIDE_DOCUMENT_ROOT = /usr/local/www/data/freeside
 #openbsd
@@ -45,18 +45,18 @@ INIT_FILE = /etc/init.d/freeside
 #INIT_FILE = /usr/local/etc/rc.d/011.freeside.sh
 
 #deb
-INIT_INSTALL = PATH=$PATH:/sbin /usr/sbin/update-rc.d freeside defaults 23 01
+#INIT_INSTALL = PATH=$PATH:/sbin /usr/sbin/update-rc.d freeside defaults 23 01
 #redhat, fedora
-#INIT_INSTALL = /sbin/chkconfig freeside on
+INIT_INSTALL = /sbin/chkconfig freeside on
 #not necessary (freebsd)
 #INIT_INSTALL = /usr/bin/true
 
 #deb, suse
 #HTTPD_RESTART = /etc/init.d/apache restart
 #deb w/apache2
-HTTPD_RESTART = /etc/init.d/apache2 restart
+#HTTPD_RESTART = /etc/init.d/apache2 restart
 #redhat, fedora, mandrake
-#HTTPD_RESTART = /etc/init.d/httpd restart
+HTTPD_RESTART = /etc/init.d/httpd restart
 #freebsd
 #HTTPD_RESTART = /usr/local/etc/rc.d/apache.sh stop || true; sleep 10; /usr/local/etc/rc.d/apache.sh start
 #openbsd
@@ -66,8 +66,8 @@ HTTPD_RESTART = /etc/init.d/apache2 restart
 
 #(an include directory, not a file, "Include /etc/apache/conf.d" in httpd.conf)
 #deb (3.1+), apache2
-APACHE_CONF = /etc/apache2/conf.d
-INSSERV_OVERRIDE = /etc/insserv/overrides
+#APACHE_CONF = /etc/apache2/conf.d
+APACHE_CONF = /etc/httpd/conf.d
 
 FREESIDE_RESTART = ${INIT_FILE} restart
 
@@ -92,12 +92,12 @@ SELFSERVICE_INSTALL_USER = ivan
 SELFSERVICE_INSTALL_USERADD = /usr/sbin/useradd
 #SELFSERVICE_INSTALL_USERADD = "/usr/sbin/pw useradd"
 
-#RT_ENABLED = 0
-RT_ENABLED = 1
-RT_DOMAIN = example.com
-RT_TIMEZONE = US/Pacific
+RT_ENABLED = 0
+#RT_ENABLED = 1
+RT_DOMAIN = alpha.bluehost.com
+RT_TIMEZONE = US/Mountain
 #RT_TIMEZONE = US/Eastern
-FREESIDE_URL = "http://localhost/freeside/"
+FREESIDE_URL = "http://billing.alpha.bluehost.com/freeside/"
 
 #for now, same db as specified in DATASOURCE... eventually, otherwise?
 RT_DB_DATABASE = freeside
@@ -114,7 +114,8 @@ RT_PATH = /opt/rt3
 
 #only used for dev kludge now, not a big deal
 FREESIDE_PATH = `pwd`
-PERL_INC_DEV_KLUDGE = /usr/local/share/perl/5.14.2/
+#PERL_INC_DEV_KLUDGE = /usr/local/share/perl/5.14.2/
+PERL_INC_DEV_KLUDGE = /opt/rh/perl514/root/usr/local/share/perl5
 
 VERSION := `grep '^$$VERSION' FS/FS.pm | cut -d\' -f2`
 TAG := freeside_`grep '^$$VERSION' FS/FS.pm | cut -d\' -f2 | perl -pe 's/\./_/g'`
