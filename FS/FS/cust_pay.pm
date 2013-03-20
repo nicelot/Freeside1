@@ -1017,7 +1017,8 @@ sub _upgrade_data {  #class method
   ###
   my @cust_pay = qsearch( {
       'table'     => 'cust_pay',
-      'addl_from' => ' JOIN pay_batch ON cust_pay.paybatch = CAST(pay_batch.batchnum AS text) ',
+      #'addl_from' => ' JOIN pay_batch ON cust_pay.paybatch = CAST(pay_batch.batchnum AS text) ',
+      'addl_from' => ' JOIN pay_batch ON cust_pay.paybatch = CAST(pay_batch.batchnum AS CHAR) ',
   } );
   foreach my $cust_pay (@cust_pay) {
     $cust_pay->set('batchnum' => $cust_pay->paybatch);
