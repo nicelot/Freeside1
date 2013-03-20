@@ -1529,7 +1529,17 @@ and customer address. Include units.',
     'section'     => 'invoicing',
     'description' => 'Split invoice into sections and label according to package category when enabled.',
     'type'        => 'checkbox',
+    'per_agent'   => 1,
   },
+
+  #quotations seem broken-ish with sections ATM?
+  #{ 
+  #  'key'         => 'quotation_sections',
+  #  'section'     => 'invoicing',
+  #  'description' => 'Split quotations into sections and label according to package category when enabled.',
+  #  'type'        => 'checkbox',
+  #  'per_agent'   => 1,
+  #},
 
   { 
     'key'         => 'usage_class_as_a_section',
@@ -4835,7 +4845,7 @@ and customer address. Include units.',
   {
     'key'         => 'svc_broadband-manage_link',
     'section'     => 'UI',
-    'description' => 'URL for svc_broadband "Manage Device" link.  The following substitutions are available: $ip_addr.',
+    'description' => 'URL for svc_broadband "Manage Device" link.  The following substitutions are available: $ip_addr and $mac_addr.',
     'type'        => 'text',
   },
 
@@ -5404,6 +5414,13 @@ and customer address. Include units.',
     'section'     => '',
     'description' => 'On this day of each month, agents with master customer records containing email addresses will be emailed a list of their customers and balances.',
     'type'        => 'text',
+  },
+
+  {
+    'key'         => 'report-cust_pay-select_time',
+    'section'     => 'UI',
+    'description' => 'Enable time selection on payment and refund reports.',
+    'type'        => 'checkbox',
   },
 
   { key => "apacheroot", section => "deprecated", description => "<b>DEPRECATED</b>", type => "text" },
