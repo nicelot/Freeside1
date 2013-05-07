@@ -92,8 +92,8 @@ SELFSERVICE_INSTALL_USER = ivan
 SELFSERVICE_INSTALL_USERADD = /usr/sbin/useradd
 #SELFSERVICE_INSTALL_USERADD = "/usr/sbin/pw useradd"
 
-RT_ENABLED = 0
-#RT_ENABLED = 1
+#RT_ENABLED = 0
+RT_ENABLED = 1
 RT_DOMAIN = alpha.bluehost.com
 RT_TIMEZONE = US/Mountain
 #RT_TIMEZONE = US/Eastern
@@ -101,6 +101,7 @@ FREESIDE_URL = "http://billing.alpha.bluehost.com/freeside/"
 
 #for now, same db as specified in DATASOURCE... eventually, otherwise?
 RT_DB_DATABASE = freeside
+RT_DB_HOST = casmysql.alpha.bluehost.com
 
 TORRUS_ENABLED = 0
 
@@ -359,7 +360,8 @@ configure-rt:
 	            --with-web-user=freeside \
 	            --with-web-group=freeside \
 	            --with-rt-group=freeside \
-	            --with-web-handler=modperl2
+	            --with-web-handler=modperl2 \
+                    --with-db-host="${RT_DB_HOST}"
 
 create-rt: configure-rt
 	[ -d /opt           ] || mkdir /opt           #doh
