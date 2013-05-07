@@ -11,7 +11,7 @@
 <%once>
 
 my $me = '[edit/process/cust_main.cgi]';
-my $DEBUG = 0;
+my $DEBUG = 1;
 
 </%once>
 <%init>
@@ -83,10 +83,7 @@ for my $pre (qw(bill ship)) {
   }
   $hash{'custnum'} = $cgi->param('custnum');
   warn Dumper \%hash if $DEBUG;
-  # if we can qsearchs it, then it's unchanged, so use that
-  $locations{$pre} = qsearchs('cust_location', \%hash)
-                     || FS::cust_location->new( \%hash );
-
+  $locations{$pre} = FS::cust_location->new(\%hash);
 }
 
 if ( ($cgi->param('same') || '') eq 'Y' ) {

@@ -459,7 +459,13 @@ sub qsearch {
 #    grep defined( $record->{$_} ) && $record->{$_} ne '', @fields
 #  ) or croak "Error executing \"$statement\": ". $sth->errstr;
 
-  $sth->execute or croak "Error executing \"$statement\": ". $sth->errstr;
+  my $ok = $sth->execute;
+  if (!$ok) {
+    my $error = "Error executing \"$statement\"";
+    $error .= ' (' . join(', ', map {"'$_'"} @value) . ')' if @value;
+    $error .= ': '. $sth->errstr;
+    croak $error;
+  }
 
   my $table = $stable[0];
   my $pkey = '';
@@ -1800,6 +1806,8 @@ sub batch_import {
 
       last unless scalar(@buffer);
       my $row = shift @buffer;
+      &{ $asn_format->{row_callback} }( $row, $asn_header_buffer )
+        if $asn_format->{row_callback};
       foreach my $key ( keys %{ $asn_format->{map} } ) {
         $hash{$key} = &{ $asn_format->{map}{$key} }( $row, $asn_header_buffer );
       }

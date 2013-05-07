@@ -77,7 +77,7 @@ if ( -e $addl_handler_use_file ) {
   use HTML::TableExtract qw(tree);
   use HTML::FormatText;
   use HTML::Defang;
-  use JSON;
+  use JSON::XS;
 #  use XMLRPC::Transport::HTTP;
 #  use XMLRPC::Lite; # for XMLRPC::Serializer
   use MIME::Base64;
@@ -160,6 +160,7 @@ if ( -e $addl_handler_use_file ) {
   use FS::cust_credit;
   use FS::cust_credit_bill;
   use FS::cust_main;
+  use FS::h_cust_main;
   use FS::cust_main::Search qw(smart_search);
   use FS::cust_main::Import;
   use FS::cust_main_county;
@@ -337,6 +338,7 @@ if ( -e $addl_handler_use_file ) {
   use FS::part_pkg_usage_class;
   use FS::part_pkg_usage;
   use FS::cdr_cust_pkg_usage;
+  use FS::part_pkg_msgcat;
   # Sammath Naur
 
   if ( $FS::Mason::addl_handler_use ) {

@@ -472,23 +472,26 @@ sub cust_fields_subs {
   my $unlinked_warn = 0;
   return map { 
     my $f = $_;
-    if( $unlinked_warn++ ) {
+    if ( $unlinked_warn++ ) {
+
       sub {
         my $record = shift;
-        if( $record->custnum ) {
-          $record->$f(@_);
-        }
-        else {
+        if ( $record->custnum ) {
+          encode_entities( $record->$f(@_) );
+        } else {
           '(unlinked)'
         };
-      }
-    } 
-    else {
+      };
+
+    } else {
+
       sub {
         my $record = shift;
-        $record->$f(@_) if $record->custnum;
-      }
+        $record->custnum ? encode_entities( $record->$f(@_) ) : '';
+      };
+
     }
+
   } @cust_fields;
 }
 
@@ -578,7 +581,7 @@ use vars qw($DEBUG);
 use Carp;
 use Storable qw(nfreeze);
 use MIME::Base64;
-use JSON;
+use JSON::XS;
 use FS::UID qw(getotaker);
 use FS::Record qw(qsearchs);
 use FS::queue;
@@ -723,10 +726,7 @@ sub job_status {
     @return = ( 'error', $job ? $job->statustext : $jobnum );
   }
 
-  #to_json(\@return);  #waiting on deb 5.0 for new JSON.pm?
-  #silence the warning though
-  my $to_json = JSON->can('to_json') || JSON->can('objToJson');
-  &$to_json(\@return);
+  encode_json \@return;
 
 }
 

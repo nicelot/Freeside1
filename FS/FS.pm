@@ -3,7 +3,7 @@ package FS;
 use strict;
 use vars qw($VERSION);
 
-$VERSION = '3.0';
+$VERSION = '3.1git';
 
 #find missing entries in this file with:
 # for a in `ls *pm | cut -d. -f1`; do grep 'L<FS::'$a'>' ../FS.pm >/dev/null || echo "missing $a" ; done
@@ -230,6 +230,8 @@ L<FS::pkg_category> - Package category class (invoice oriented)
 L<FS::pkg_class> - Package class class
 
 L<FS::part_pkg> - Package definition class
+
+L<FS::part_pkg_msgcat> - Package definition localization class
 
 L<FS::part_pkg_link> - Package definition link class
 

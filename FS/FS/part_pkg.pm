@@ -1,7 +1,8 @@
 package FS::part_pkg;
+use base qw( FS::m2m_Common FS::o2m_Common FS::option_Common );
 
 use strict;
-use vars qw( @ISA %plans $DEBUG $setup_hack $skip_pkg_svc_hack );
+use vars qw( %plans $DEBUG $setup_hack $skip_pkg_svc_hack );
 use Carp qw(carp cluck confess);
 use Scalar::Util qw( blessed );
 use Time::Local qw( timelocal_nocheck );
@@ -16,6 +17,7 @@ use FS::type_pkgs;
 use FS::part_pkg_option;
 use FS::pkg_class;
 use FS::agent;
+use FS::part_pkg_msgcat;
 use FS::part_pkg_taxrate;
 use FS::part_pkg_taxoverride;
 use FS::part_pkg_taxproduct;
@@ -24,7 +26,6 @@ use FS::part_pkg_discount;
 use FS::part_pkg_usage;
 use FS::part_pkg_vendor;
 
-@ISA = qw( FS::m2m_Common FS::option_Common );
 $DEBUG = 0;
 $setup_hack = 0;
 $skip_pkg_svc_hack = 0;
@@ -713,6 +714,35 @@ sub propagate {
       if $error;
   }
   join("\n", @error);
+}
+
+=item pkg_locale LOCALE
+
+Returns a customer-viewable string representing this package for the given
+locale, from the part_pkg_msgcat table.  If the given locale is empty or no
+localized string is found, returns the base pkg field.
+
+=cut
+
+sub pkg_locale {
+  my( $self, $locale ) = @_;
+  return $self->pkg unless $locale;
+  my $part_pkg_msgcat = $self->part_pkg_msgcat($locale) or return $self->pkg;
+  $part_pkg_msgcat->pkg;
+}
+
+=item part_pkg_msgcat LOCALE
+
+Like pkg_locale, but returns the FS::part_pkg_msgcat object itself.
+
+=cut
+
+sub part_pkg_msgcat {
+  my( $self, $locale ) = @_;
+  qsearchs( 'part_pkg_msgcat', {
+    pkgpart => $self->pkgpart,
+    locale  => $locale,
+  });
 }
 
 =item pkg_comment [ OPTION => VALUE... ]

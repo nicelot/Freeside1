@@ -1,4 +1,4 @@
-<TD CLASS="inv" BGCOLOR="<% $bgcolor %>">
+<TD CLASS="inv" BGCOLOR="<% $bgcolor %>" VALIGN="top">
   <TABLE CLASS="inv" BORDER=0 CELLSPACING=0 CELLPADDING=0 WIDTH="100%">
 
 %#this should use cust_pkg->status and cust_pkg->statuscolor eventually
@@ -13,6 +13,8 @@
 %   my $cpr = $cust_pkg->last_cust_pkg_reason('cancel');
 
     <% pkg_status_row($cust_pkg, emt('Cancelled'), 'cancel', 'color'=>'FF0000', %opt ) %>
+
+    <% pkg_status_row_detached($cust_pkg, %opt) %>
 
     <% pkg_reason_row($cust_pkg, $cpr, color => 'ff0000', %opt) %>
 
@@ -29,7 +31,7 @@
 
 %   } 
 %
-%   if ( $part_pkg->freq and !$supplemental ) { #?
+%   if ( $part_pkg->freq && !$supplemental && !$cust_pkg->change_custnum ) { #?
 
       <TR>
         <TD COLSPAN=<%$opt{colspan}%>>
@@ -354,6 +356,37 @@ sub pkg_status_row_changed {
                                      '',
                                      'size'    => '-1',
                                      'align'   => 'right',
+                                   );
+  }
+
+  $html;
+}
+
+sub pkg_status_row_detached {
+  my( $cust_pkg, %opt ) = @_;
+
+  return '' unless $cust_pkg->change_custnum;
+
+  my $html = '';
+
+  my $cust_main = $cust_pkg->change_cust_main;
+  if ( $cust_main ) {
+
+    my $cust_link = '<A HREF="cust_main.cgi?'.  $cust_pkg->change_custnum. '">'.
+                      encode_entities( $cust_main->name ).
+                    '</A>';
+
+    my $what = $opt{'pkg_attached'} ? 'Attached' : 'Detached';
+
+    $html .= pkg_status_row_colspan( $cust_pkg, 
+                                     emt("$what to customer #[_1]: ",
+                                            $cust_pkg->change_custnum
+                                        ).
+                                       $cust_link,
+                                     '',
+                                     'size'    => '-1',
+                                     'align'   => 'right',
+                                     'colspan' => 4,
                                    );
   }
 

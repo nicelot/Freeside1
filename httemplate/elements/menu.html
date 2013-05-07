@@ -294,9 +294,11 @@ tie my %report_ticketing, 'Tie::IxHash',
   'Advanced ticket reports' => [ $fsurl.'rt/Search/Build.html?NewQuery=1', 'List tickets by any criteria' ],
 ;
 
-tie my %report_employees, 'Tie::IxHash',
-  'Employee Commission Report' => [ $fsurl.'search/report_employee_commission.html', '' ],
-  'Employee Audit Report' => [ $fsurl.'search/report_employee_audit.html', 'Employee audit report' ],
+tie my %report_employees, 'Tie::IxHash';
+$report_employees{'Employee Commission Report'} = [ $fsurl.'search/report_employee_commission.html', '' ]
+  if $curuser->access_right('Employees: Commission Report');
+$report_employees{'Employee Audit Report'} = [ $fsurl.'search/report_employee_audit.html', 'Employee audit report' ]
+  if $curuser->access_right('Employees: Audit Report');
 ;
 
 tie my %report_bill_event, 'Tie::IxHash',
@@ -397,7 +399,7 @@ $report_menu{'Tickets'}        = [ \%report_ticketing, 'Ticket reports' ]
   if $conf->config('ticket_system')
   ;#&& FS::TicketSystem->access_right(\%session, 'Something');
 $report_menu{'Employees'}      =  [ \%report_employees, 'Employee reports'  ]
-  if $curuser->access_right('Financial reports');
+  if keys %report_employees;
 $report_menu{'Billing events'} =  [ \%report_bill_event, 'Billing events' ]
   if $curuser->access_right('Billing event reports');
 $report_menu{'Financial'}      = [ \%report_financial, 'Financial reports' ]
@@ -464,6 +466,8 @@ $tools_menu{'Job Queue'} =  [ $fsurl.'search/queue.html', 'View pending job queu
   if $curuser->access_right('Job queue');
 $tools_menu{'Ticketing'} = [ \%tools_ticketing, 'Ticketing tools' ]
   if $conf->config('ticket_system');
+$tools_menu{'Customer email settings'} = [ $fsurl.'misc/manage_cust_email.html' ]
+  if $curuser->access_right('Edit customer');
 $tools_menu{'Business card scan'} = [ $fsurl.'edit/prospect_main-upload.html' ]
   if $curuser->access_right('New prospect');
 $tools_menu{'Time Queue'} =  [ $fsurl.'search/report_timeworked.html', 'View pending support time' ]

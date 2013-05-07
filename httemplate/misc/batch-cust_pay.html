@@ -23,13 +23,19 @@ function add_row_callback(rownum, prefix) {
 
 function custnum_update_callback(rownum, prefix) {
   var custnum = document.getElementById('custnum'+rownum).value;
-  document.getElementById('enable_app'+rownum).disabled = (
-    custnum == 0 || 
-    num_open_invoices[rownum] < 2
-  );
+  // if there is a custnum and more than one open invoice, enable
+  // (and check) the box
+  var show_applications = (custnum > 0 && num_open_invoices[rownum] > 1);
+  var enable_app_checkbox = document.getElementById('enable_app'+rownum);
+  enable_app_checkbox.disabled = show_applications;
+
 % if ( $use_discounts ) {
   select_discount_term(rownum, prefix);
 % }
+}
+
+function invnum_update_callback(rownum, prefix) {
+  custnum_update_callback(rownum, prefix);
 }
 
 function select_discount_term(row, prefix) {
@@ -89,6 +95,17 @@ function toggle_application_row(ev, next) {
         next.call(this, rownum);
       }
     );
+  } else {
+    var row = document.getElementById('row'+rownum);
+    var table_rows = row.parentNode.rows;
+    for (i = row.sectionRowIndex; i < table_rows.count; i++) {
+      if ( table_rows[i].id.indexof('row'+rownum+'.') > -1 ) {
+        table_rows.removeChild(table_rows[i]);
+      } else {
+        break;
+      }
+    }
+    lock_payment_row(rownum, false);
   }
 }
 
@@ -198,7 +215,6 @@ function change_app_amount() {
        && amount_unapplied(rownum) > 0 ) {
 
     create_application_row(rownum, parseInt(appnum) + 1);
-
   }
 }
 
@@ -352,6 +368,7 @@ function preload() {
     footer_align => \@footer_align,
     onchange => \@onchange,
     custnum_update_callback => 'custnum_update_callback',
+    invnum_update_callback => 'invnum_update_callback',
     add_row_callback => 'add_row_callback',
 &>
 

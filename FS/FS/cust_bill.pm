@@ -2130,10 +2130,13 @@ sub print_csv {
     $previous_balance = sprintf('%.2f', $previous_balance);
     my $totaldue = sprintf('%.2f', $self->owed + $previous_balance);
     my @items = map {
-      ($_->{pkgnum} || ''),
-      $_->{description},
-      $_->{amount}
-    } $self->_items_pkg;
+                      $_->{pkgnum},
+                      $_->{description},
+                      $_->{amount}
+                    }
+                  $self->_items_pkg, #_items_nontax?  no sections or anything
+                                     # with this format
+                  $self->_items_tax;
 
     $csv->combine(
       $cust_main->agentnum,
@@ -2141,6 +2144,7 @@ sub print_csv {
       $self->custnum,
       $cust_main->first,
       $cust_main->last,
+      $cust_main->company,
       $cust_main->address1,
       $cust_main->address2,
       $cust_main->city,
@@ -3134,11 +3138,16 @@ sub _items_payments {
 
     #something more elaborate if $_->amount ne ->cust_pay->paid ?
 
+    my $desc = $self->mt('Payment received').' '.
+               time2str($date_format,$_->cust_pay->_date );
+    $desc   .= $self->mt(' via ' . $_->cust_pay->payby_payinfo_pretty)
+      if ( $self->conf->exists('invoice_payment_details') );
+ 
     push @b, {
-      'description' => $self->mt('Payment received').' '.
-                       time2str($date_format,$_->cust_pay->_date ),
+      'description' => $desc,
       'amount'      => sprintf("%.2f", $_->amount )
     };
+
   }
 
   @b;

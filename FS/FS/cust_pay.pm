@@ -1034,13 +1034,17 @@ sub _upgrade_data {  #class method
 
   # not only cust_pay, but also voided and refunded payments
   if (!FS::upgrade_journal->is_done('cust_pay__parse_paybatch_1')) {
+    local $FS::Record::nowarn_classload=1;
     # really inefficient, but again, only has to run once
     foreach my $table (qw(cust_pay cust_pay_void cust_refund)) {
+      my $and_batchnum_is_null =
+        ( $table =~ /^cust_pay/ ? ' AND batchnum IS NULL' : '' );
       foreach my $object ( qsearch({
             table     => $table,
             extra_sql => "WHERE payby IN('CARD','CHEK') ".
                          "AND (paybatch IS NOT NULL ".
-                         "OR (paybatch IS NULL AND auth IS NULL) )",
+                         "OR (paybatch IS NULL AND auth IS NULL
+                         $and_batchnum_is_null ) )",
           }) )
       {
         if ( $object->paybatch eq '' ) {
@@ -1060,6 +1064,8 @@ sub _upgrade_data {  #class method
             warn "couldn't find paybatch history record for $table ".$object->$pkey."\n";
             next;
           }
+          # if the paybatch didn't have an auth string, then it's fine
+          $h->paybatch =~ /:(\w+):/ or next;
           # set paybatch to what it was in that record
           $object->set('paybatch', $h->paybatch)
           # and then upgrade it like the old records
@@ -1077,7 +1083,7 @@ sub _upgrade_data {  #class method
         }
       } #$object
     } #$table
-    FS::upgrade_journal->set_done('cust_pay__parse_paybatch');
+    FS::upgrade_journal->set_done('cust_pay__parse_paybatch_1');
   }
 }
 

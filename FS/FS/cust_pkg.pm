@@ -1,7 +1,8 @@
 package FS::cust_pkg;
 
 use strict;
-use base qw( FS::otaker_Mixin FS::cust_main_Mixin FS::location_Mixin
+use base qw( FS::otaker_Mixin FS::cust_main_Mixin
+             FS::contact_Mixin FS::location_Mixin
              FS::m2m_Common FS::option_Common );
 use vars qw($disable_agentcheck $DEBUG $me);
 use Carp qw(cluck);
@@ -17,6 +18,7 @@ use FS::CurrentUser;
 use FS::cust_svc;
 use FS::part_pkg;
 use FS::cust_main;
+use FS::contact;
 use FS::cust_location;
 use FS::pkg_svc;
 use FS::cust_bill_pkg;
@@ -225,7 +227,7 @@ Create a new billing item.  To add the item to the database, see L<"insert">.
 =cut
 
 sub table { 'cust_pkg'; }
-sub cust_linked { $_[0]->cust_main_custnum; } 
+sub cust_linked { $_[0]->cust_main_custnum || $_[0]->custnum } 
 sub cust_unlinked_msg {
   my $self = shift;
   "WARNING: can't find cust_main.custnum ". $self->custnum.
@@ -267,6 +269,12 @@ a ticket will be added to this customer with this subject
 
 an optional queue name for ticket additions
 
+=item allow_pkgpart
+
+Don't check the legality of the package definition.  This should be used
+when performing a package change that doesn't change the pkgpart (i.e. 
+a location change).
+
 =back
 
 =cut
@@ -274,7 +282,8 @@ an optional queue name for ticket additions
 sub insert {
   my( $self, %options ) = @_;
 
-  my $error = $self->check_pkgpart;
+  my $error;
+  $error = $self->check_pkgpart unless $options{'allow_pkgpart'};
   return $error if $error;
 
   my $part_pkg = $self->part_pkg;
@@ -613,7 +622,7 @@ sub check {
     $self->ut_numbern('pkgnum')
     || $self->ut_foreign_key('custnum', 'cust_main', 'custnum')
     || $self->ut_numbern('pkgpart')
-    || $self->check_pkgpart
+    || $self->ut_foreign_keyn('contactnum',  'contact',       'contactnum' )
     || $self->ut_foreign_keyn('locationnum', 'cust_location', 'locationnum')
     || $self->ut_numbern('start_date')
     || $self->ut_numbern('setup')
@@ -654,14 +663,19 @@ sub check {
 
 =item check_pkgpart
 
+Check the pkgpart to make sure it's allowed with the reg_code and/or
+promo_code of the package (if present) and with the customer's agent.
+Called from C<insert>, unless we are doing a package change that doesn't
+affect pkgpart.
+
 =cut
 
 sub check_pkgpart {
   my $self = shift;
 
-  my $error = $self->ut_numbern('pkgpart');
-  return $error if $error;
+  # my $error = $self->ut_numbern('pkgpart'); # already done
 
+  my $error;
   if ( $self->reg_code ) {
 
     unless ( grep { $self->pkgpart == $_->pkgpart }
@@ -848,6 +862,7 @@ sub cancel {
 
   my %hash = $self->hash;
   $date ? ($hash{'expire'} = $date) : ($hash{'cancel'} = $cancel_time);
+  $hash{'change_custnum'} = $options{'change_custnum'};
   my $new = new FS::cust_pkg ( \%hash );
   $error = $new->replace( $self, options => { $self->options } );
   if ( $error ) {
@@ -981,6 +996,7 @@ sub uncancel {
 
   my $error = $cust_pkg->insert(
     'change' => 1, #supresses any referral credit to a referring customer
+    'allow_pkgpart' => 1, # allow this even if the package def is disabled
   );
   if ($error) {
     $dbh->rollback if $oldAutoCommit;
@@ -1022,15 +1038,20 @@ sub uncancel {
         $dbh->rollback if $oldAutoCommit;
         return $svc_error;
       } else {
+        # if we've failed to insert the svc_x object, svc_Common->insert 
+        # will have removed the cust_svc already.  if not, then both records
+        # were inserted but we failed for some other reason (export, most 
+        # likely).  in that case, report the error and delete the records.
         push @svc_errors, $svc_error;
-        # is this necessary? svc_Common::insert already deletes the 
-        # cust_svc if inserting svc_x fails.
         my $cust_svc = qsearchs('cust_svc', { 'svcnum' => $svc_x->svcnum });
         if ( $cust_svc ) {
-          my $cs_error = $cust_svc->delete;
-          if ( $cs_error ) {
+          # except if export_insert failed, export_delete probably won't be
+          # much better
+          local $FS::svc_Common::noexport_hack = 1;
+          my $cleanup_error = $svc_x->delete; # also deletes cust_svc
+          if ( $cleanup_error ) { # and if THAT fails, then run away
             $dbh->rollback if $oldAutoCommit;
-            return $cs_error;
+            return $cleanup_error;
           }
         }
       } # svc_fatal
@@ -1683,6 +1704,11 @@ New locationnum, to change the location for this package.
 New FS::cust_location object, to create a new location and assign it
 to this package.
 
+=item cust_main
+
+New FS::cust_main object, to create a new customer and assign the new package
+to it.
+
 =item pkgpart
 
 New pkgpart (see L<FS::part_pkg>).
@@ -1747,14 +1773,19 @@ sub change {
   $hash{"change_$_"}  = $self->$_()
     foreach qw( pkgnum pkgpart locationnum );
 
-  if ( $opt->{'cust_location'} &&
-       ( ! $opt->{'locationnum'} || $opt->{'locationnum'} == -1 ) ) {
-    $error = $opt->{'cust_location'}->insert;
+  if ( $opt->{'cust_location'} ) {
+    $error = $opt->{'cust_location'}->find_or_insert;
     if ( $error ) {
       $dbh->rollback if $oldAutoCommit;
       return "inserting cust_location (transaction rolled back): $error";
     }
     $opt->{'locationnum'} = $opt->{'cust_location'}->locationnum;
+  }
+
+  # whether to override pkgpart checking on the new package
+  my $same_pkgpart = 1;
+  if ( $opt->{'pkgpart'} and ( $opt->{'pkgpart'} != $self->pkgpart ) ) {
+    $same_pkgpart = 0;
   }
 
   my $unused_credit = 0;
@@ -1781,15 +1812,37 @@ sub change {
   # (i.e. customer default location)
   $opt->{'locationnum'} = $self->locationnum if !exists($opt->{'locationnum'});
 
+  # usually this doesn't matter.  the two cases where it does are:
+  # 1. unused_credit_change + pkgpart change + setup fee on the new package
+  # and
+  # 2. (more importantly) changing a package before it's billed
+  $hash{'waive_setup'} = $self->waive_setup;
+
+  my $custnum = $self->custnum;
+  if ( $opt->{cust_main} ) {
+    my $cust_main = $opt->{cust_main};
+    unless ( $cust_main->custnum ) { 
+      my $error = $cust_main->insert;
+      if ( $error ) {
+        $dbh->rollback if $oldAutoCommit;
+        return "inserting cust_main (transaction rolled back): $error";
+      }
+    }
+    $custnum = $cust_main->custnum;
+  }
+
+  $hash{'contactnum'} = $opt->{'contactnum'} if $opt->{'contactnum'};
+
   # Create the new package.
   my $cust_pkg = new FS::cust_pkg {
-    custnum      => $self->custnum,
-    pkgpart      => ( $opt->{'pkgpart'}     || $self->pkgpart      ),
-    refnum       => ( $opt->{'refnum'}      || $self->refnum       ),
-    locationnum  => ( $opt->{'locationnum'}                        ),
+    custnum        => $custnum,
+    pkgpart        => ( $opt->{'pkgpart'}     || $self->pkgpart      ),
+    refnum         => ( $opt->{'refnum'}      || $self->refnum       ),
+    locationnum    => ( $opt->{'locationnum'}                        ),
     %hash,
   };
-  $error = $cust_pkg->insert( 'change' => 1 );
+  $error = $cust_pkg->insert( 'change' => 1,
+                              'allow_pkgpart' => $same_pkgpart );
   if ($error) {
     $dbh->rollback if $oldAutoCommit;
     return $error;
@@ -1847,6 +1900,23 @@ sub change {
     }
   }
 
+  # transfer discounts, if we're not changing pkgpart
+  if ( $same_pkgpart ) {
+    foreach my $old_discount ($self->cust_pkg_discount_active) {
+      # don't remove the old discount, we may still need to bill that package.
+      my $new_discount = new FS::cust_pkg_discount {
+        'pkgnum'      => $cust_pkg->pkgnum,
+        'discountnum' => $old_discount->discountnum,
+        'months_used' => $old_discount->months_used,
+      };
+      $error = $new_discount->insert;
+      if ( $error ) {
+        $dbh->rollback if $oldAutoCommit;
+        return "Error transferring discounts: $error";
+      }
+    }
+  }
+
   # Order any supplemental packages.
   my $part_pkg = $cust_pkg->part_pkg;
   my @old_supp_pkgs = $self->supplemental_pkgs;
@@ -1864,7 +1934,7 @@ sub change {
     my $new = FS::cust_pkg->new({
         pkgpart       => $link->dst_pkgpart,
         pkglinknum    => $link->pkglinknum,
-        custnum       => $self->custnum,
+        custnum       => $custnum,
         main_pkgnum   => $cust_pkg->pkgnum,
         locationnum   => $cust_pkg->locationnum,
         start_date    => $cust_pkg->start_date,
@@ -1874,14 +1944,14 @@ sub change {
         contract_end  => $cust_pkg->contract_end,
         refnum        => $cust_pkg->refnum,
         discountnum   => $cust_pkg->discountnum,
-        waive_setup   => $cust_pkg->waive_setup
+        waive_setup   => $cust_pkg->waive_setup,
     });
     if ( $old and $opt->{'keep_dates'} ) {
       foreach (qw(setup bill last_bill)) {
         $new->set($_, $old->get($_));
       }
     }
-    $error = $new->insert;
+    $error = $new->insert( allow_pkgpart => $same_pkgpart );
     # transfer services
     if ( $old ) {
       $error ||= $old->transfer($new);
@@ -1905,9 +1975,10 @@ sub change {
   #because the new package will be billed for the same date range.
   #Supplemental packages are also canceled here.
   $error = $self->cancel(
-    quiet         => 1, 
-    unused_credit => $unused_credit,
-    nobill        => $keep_dates
+    quiet          => 1, 
+    unused_credit  => $unused_credit,
+    nobill         => $keep_dates,
+    change_custnum => ( $self->custnum != $custnum ? $custnum : '' ),
   );
   if ($error) {
     $dbh->rollback if $oldAutoCommit;
@@ -1929,6 +2000,24 @@ sub change {
 
   $cust_pkg;
 
+}
+
+=item set_quantity QUANTITY
+
+Change the package's quantity field.  This is the one package property
+that can safely be changed without canceling and reordering the package
+(because it doesn't affect tax eligibility).  Returns an error or an 
+empty string.
+
+=cut
+
+sub set_quantity {
+  my $self = shift;
+  $self = $self->replace_old; # just to make sure
+  my $qty = shift;
+  ($qty =~ /^\d+$/ and $qty > 0) or return "bad package quantity $qty";
+  $self->set('quantity' => $qty);
+  $self->replace;
 }
 
 use Storable 'thaw';
@@ -2059,6 +2148,18 @@ sub old_cust_pkg {
   my $self = shift;
   return '' unless $self->change_pkgnum;
   qsearchs('cust_pkg', { 'pkgnum' => $self->change_pkgnum } );
+}
+
+=item change_cust_main
+
+Returns the customter this package was detached to, if any.
+
+=cut
+
+sub change_cust_main {
+  my $self = shift;
+  return '' unless $self->change_custnum;
+  qsearchs('cust_main', { 'custnum' => $self->change_custnum } );
 }
 
 =item calc_setup
@@ -2621,7 +2722,7 @@ sub statuscolor {
 =item pkg_label
 
 Returns a label for this package.  (Currently "pkgnum: pkg - comment" or
-"pkg-comment" depending on user preference).
+"pkg - comment" depending on user preference).
 
 =cut
 
@@ -2646,6 +2747,17 @@ sub pkg_label_long {
   my $cust_svc = $self->primary_cust_svc;
   $label .= ' ('. ($cust_svc->label)[1]. ')' if $cust_svc;
   $label;
+}
+
+=item pkg_locale
+
+Returns a customer-localized label for this package.
+
+=cut
+
+sub pkg_locale {
+  my $self = shift;
+  $self->part_pkg->pkg_locale( $self->cust_main->locale );
 }
 
 =item primary_cust_svc

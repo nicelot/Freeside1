@@ -2098,7 +2098,7 @@ and customer address. Include units.',
     'section'     => 'self-service',
     'description' => 'Acceptable payment types for the signup server',
     'type'        => 'selectmultiple',
-    'select_enum' => [ qw(CARD DCRD CHEK DCHK LECB PREPAY BILL COMP) ],
+    'select_enum' => [ qw(CARD DCRD CHEK DCHK LECB PREPAY PPAL BILL COMP) ],
   },
 
   {
@@ -2159,8 +2159,15 @@ and customer address. Include units.',
   {
     'key'         => 'signup_server-default_svcpart',
     'section'     => 'self-service',
-    'description' => 'Default service definition for the signup server - only necessary for services that trigger special provisioning widgets (such as DID provisioning).',
+    'description' => 'Default service definition for the signup server - only necessary for services that trigger special provisioning widgets (such as DID provisioning or domain selection).',
     'type'        => 'select-part_svc',
+  },
+
+  {
+    'key'         => 'signup_server-default_domsvc',
+    'section'     => 'self-service',
+    'description' => 'If specified, the default domain svcpart for signup (useful when domain is set to selectable choice).',
+    'type'        => 'text',
   },
 
   {
@@ -2472,7 +2479,7 @@ and customer address. Include units.',
     'section'     => 'billing',
     'description' => 'Available payment types.',
     'type'        => 'selectmultiple',
-    'select_enum' => [ qw(CARD DCRD CHEK DCHK LECB BILL CASH WEST MCRD COMP) ],
+    'select_enum' => [ qw(CARD DCRD CHEK DCHK LECB BILL CASH WEST MCRD PPAL COMP) ],
   },
 
   {
@@ -2480,7 +2487,7 @@ and customer address. Include units.',
     'section'     => 'UI',
     'description' => 'Default payment type.  HIDE disables display of billing information and sets customers to BILL.',
     'type'        => 'select',
-    'select_enum' => [ '', qw(CARD DCRD CHEK DCHK LECB BILL CASH WEST MCRD COMP HIDE) ],
+    'select_enum' => [ '', qw(CARD DCRD CHEK DCHK LECB BILL CASH WEST MCRD PPAL COMP HIDE) ],
   },
 
   {
@@ -3823,6 +3830,13 @@ and customer address. Include units.',
     'type'        => 'checkbox',
   },
 
+  {
+    'key'         => 'fuzzy-fuzziness',
+    'section'     => 'UI',
+    'description' => 'Set the "fuzziness" of fuzzy searching (see the String::Approx manpage for details).  Defaults to 10%',
+    'type'        => 'text',
+  },
+
   { 'key'         => 'pkg_referral',
     'section'     => '',
     'description' => 'Enable package-specific advertising sources.',
@@ -4944,7 +4958,7 @@ and customer address. Include units.',
   {
     'key'         => 'pkg-balances',
     'section'     => 'billing',
-    'description' => 'Enable experimental package balances.  Not recommended for general use.',
+    'description' => 'Enable per-package balances.',
     'type'        => 'checkbox',
   },
 
@@ -5195,6 +5209,13 @@ and customer address. Include units.',
     'section'     => 'invoicing',
     'description' => 'Truncate long line items to this number of characters on typeset invoices, to avoid losing things off the right margin.  Defaults to 50.  ',
     'type'        => 'text',
+  },
+
+  {
+    'key'         => 'invoice_payment_details',
+    'section'     => 'invoicing',
+    'description' => 'When displaying payments on an invoice, show the payment method used, including the check or credit card number.  Credit card numbers will be masked.',
+    'type'        => 'checkbox',
   },
 
   {

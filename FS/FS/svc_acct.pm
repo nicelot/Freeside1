@@ -1895,12 +1895,14 @@ sub email {
   $self->username. '@'. $self->domain(@_);
 }
 
+
 =item acct_snarf
 
 Returns an array of FS::acct_snarf records associated with the account.
 
 =cut
 
+# unused as originally intended, but now by Communigate Pro "RPOP"
 sub acct_snarf {
   my $self = shift;
   qsearch({

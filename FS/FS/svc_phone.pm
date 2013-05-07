@@ -288,9 +288,8 @@ sub insert {
 
   #false laziness w/cust_pkg.pm... move this to location_Mixin?  that would
   #make it more of a base class than a mixin... :)
-  if ( $options{'cust_location'}
-         && ( ! $self->locationnum || $self->locationnum == -1 ) ) {
-    my $error = $options{'cust_location'}->insert;
+  if ( $options{'cust_location'} ) {
+    my $error = $options{'cust_location'}->find_or_insert;
     if ( $error ) {
       $dbh->rollback if $oldAutoCommit;
       return "inserting cust_location (transaction rolled back): $error";
@@ -684,7 +683,9 @@ with the chosen prefix.
 
 =item begin, end: Start and end of a date range, as unix timestamp.
 
-=item cdrtypenum: Only return CDRs with this type number.
+=item cdrtypenum: Only return CDRs with this type.
+
+=item calltypenum: Only return CDRs with this call type.
 
 =item disable_src => 1: Only match on "charged_party", not "src".
 
@@ -734,6 +735,9 @@ sub psearch_cdrs {
 
   if ($options{'cdrtypenum'}) {
     $hash{'cdrtypenum'} = $options{'cdrtypenum'};
+  }
+  if ($options{'calltypenum'}) {
+    $hash{'calltypenum'} = $options{'calltypenum'};
   }
   
   my $for_update = $options{'for_update'} ? 'FOR UPDATE' : '';

@@ -390,7 +390,7 @@ sub insert {
 
     $payby = 'PREP' if $amount;
 
-  } elsif ( $self->payby =~ /^(CASH|WEST|MCRD)$/ ) {
+  } elsif ( $self->payby =~ /^(CASH|WEST|MCRD|PPAL)$/ ) {
 
     $payby = $1;
     $self->payby('BILL');
@@ -1509,43 +1509,17 @@ sub replace {
     my $old_loc = $old->$l;
     my $new_loc = $self->$l;
 
-    if ( !$new_loc->locationnum ) {
-      # changing location
-      # If the new location is all empty fields, or if it's identical to 
-      # the old location in all fields, don't replace.
-      my @nonempty = grep { $new_loc->$_ } $self->location_fields;
-      next if !@nonempty;
-      my @unlike = grep { $new_loc->$_ ne $old_loc->$_ } $self->location_fields;
-
-      if ( @unlike or $old_loc->disabled ) {
-        warn "  changed $l fields: ".join(',',@unlike)."\n"
-          if $DEBUG;
-        $new_loc->set(custnum => $self->custnum);
-
-        # insert it--the old location will be disabled later
-        my $error = $new_loc->insert;
-        if ( $error ) {
-          $dbh->rollback if $oldAutoCommit;
-          return $error;
-        }
-
-      } else {
-      # no fields have changed and $old_loc isn't disabled, so don't change it
-        next;
-      }
-
-    }
-    elsif ( $new_loc->custnum ne $self->custnum or $new_loc->prospectnum ) {
+    # find the existing location if there is one
+    $new_loc->set('custnum' => $self->custnum);
+    my $error = $new_loc->find_or_insert;
+    if ( $error ) {
       $dbh->rollback if $oldAutoCommit;
-      return "$l belongs to customer ".$new_loc->custnum;
+      return $error;
     }
-    # else the new location belongs to this customer so we're good
-
-    # set the foo_locationnum now that we have one.
     $self->set($l.'num', $new_loc->locationnum);
-
   } #for $l
 
+  # replace the customer record
   my $error = $self->SUPER::replace($old);
 
   if ( $error ) {
@@ -1778,9 +1752,10 @@ sub check {
     || $self->ut_floatn('credit_limit')
     || $self->ut_numbern('billday')
     || $self->ut_numbern('prorate_day')
-    || $self->ut_enum('edit_subject', [ '', 'Y' ] )
-    || $self->ut_enum('calling_list_exempt', [ '', 'Y' ] )
-    || $self->ut_enum('invoice_noemail', [ '', 'Y' ] )
+    || $self->ut_flag('edit_subject')
+    || $self->ut_flag('calling_list_exempt')
+    || $self->ut_flag('invoice_noemail')
+    || $self->ut_flag('message_noemail')
     || $self->ut_enum('locale', [ '', FS::Locales->locales ])
   ;
 
@@ -2020,7 +1995,8 @@ sub check {
 
   if ( $self->paydate eq '' || $self->paydate eq '-' ) {
     return "Expiration date required"
-      unless $self->payby =~ /^(BILL|PREPAY|CHEK|DCHK|LECB|CASH|WEST|MCRD)$/;
+      # shouldn't payinfo_check do this?
+      unless $self->payby =~ /^(BILL|PREPAY|CHEK|DCHK|LECB|CASH|WEST|MCRD|PPAL)$/;
     $self->paydate('');
   } else {
     my( $m, $y );

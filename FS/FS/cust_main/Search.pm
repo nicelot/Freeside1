@@ -624,14 +624,14 @@ sub search {
   # parse without census tract checkbox
   ##
 
-  push @where, "(censustract = '' or censustract is null)"
+  push @where, "(ship_location.censustract = '' or ship_location.censustract is null)"
     if $params->{'no_censustract'};
 
   ##
   # parse with hardcoded tax location checkbox
   ##
 
-  push @where, "geocode is not null"
+  push @where, "ship_location.geocode is not null"
     if $params->{'with_geocode'};
 
   ##
@@ -644,6 +644,16 @@ sub search {
                   AND length(dest) > 5
             )'  # AND dest LIKE '%@%'
     if $params->{'with_email'};
+
+  ##
+  # "with postal mail invoices" checkbox
+  ##
+
+  push @where,
+    "EXISTS ( SELECT 1 FROM cust_main_invoice
+                WHERE cust_main_invoice.custnum = cust_main.custnum
+                  AND dest = 'POST' )"
+    if $params->{'POST'};
 
   ##
   # "without postal mail invoices" checkbox
@@ -794,11 +804,19 @@ sub search {
     @tagnums = grep /^(\d+)$/, @tagnums;
 
     if ( @tagnums ) {
+      if ( $params->{'all_tags'} ) {
+        foreach ( @tagnums ) {
+          push @where, 'exists(select 1 from cust_tag where '.
+                       'cust_tag.custnum = cust_main.custnum and tagnum = '.
+                       $_ . ')';
+        }
+      } else { # matching any tag, not all
 	my $tags_where = "0 < (select count(1) from cust_tag where " 
 		. " cust_tag.custnum = cust_main.custnum and tagnum in ("
 		. join(',', @tagnums) . "))";
 
 	push @where, $tags_where;
+      }
     }
   }
 
@@ -823,7 +841,7 @@ sub search {
       'ON (cust_main.'.$pre.'locationnum = '.$pre.'location.locationnum) ';
   }
 
-  my $count_query = "SELECT COUNT(*) FROM cust_main $extra_sql";
+  my $count_query = "SELECT COUNT(*) FROM cust_main $addl_from $extra_sql";
 
   my @select = (
                  'cust_main.custnum',
@@ -839,7 +857,8 @@ sub search {
   if ($params->{'flattened_pkgs'}) {
 
     #my $pkg_join = '';
-    $addl_from .= ' LEFT JOIN cust_pkg USING ( custnum ) ';
+    $addl_from .=
+      ' LEFT JOIN cust_pkg ON ( cust_main.custnum = cust_pkg.custnum ) ';
 
     if ($dbh->{Driver}->{Name} eq 'Pg') {
 
@@ -908,6 +927,8 @@ sub search {
     'extra_headers' => \@extra_headers,
     'extra_fields'  => \@extra_fields,
   };
+  warn Data::Dumper::Dumper($sql_query);
+  $sql_query;
 
 }
 
@@ -935,6 +956,11 @@ sub fuzzy_search {
 
   my @cust_main = ();
 
+  my @fuzzy_mod = 'i';
+  my $conf = new FS::Conf;
+  my $fuzziness = $conf->config('fuzzy-fuzziness');
+  push @fuzzy_mod, $fuzziness if $fuzziness;
+
   check_and_rebuild_fuzzyfiles();
   foreach my $field ( keys %$fuzzy ) {
 
@@ -942,7 +968,7 @@ sub fuzzy_search {
     next unless scalar(@$all);
 
     my %match = ();
-    $match{$_}=1 foreach ( amatch( $fuzzy->{$field}, ['i'], @$all ) );
+    $match{$_}=1 foreach ( amatch( $fuzzy->{$field}, \@fuzzy_mod, @$all ) );
     next if !keys(%match);
 
     my $in_matches = 'IN (' .
