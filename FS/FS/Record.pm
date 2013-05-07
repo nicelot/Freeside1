@@ -25,6 +25,7 @@ use FS::SearchCache;
 use FS::Msgcat qw(gettext);
 use NetAddr::IP; # for validation
 use Data::Dumper;
+use JSON qw(to_json);
 #use FS::Conf; #dependency loop bs, in install_callback below instead
 
 use FS::part_virtual_field;
@@ -808,6 +809,17 @@ methods, speak up.
 sub hashref {
   my($self) = @_;
   $self->{'Hash'};
+}
+
+=item json
+
+Returns a json representation of the hashref method
+
+=cut
+
+sub json  {
+  my($self) = @_;
+  to_json($self->{'Hash'});
 }
 
 =item modified
