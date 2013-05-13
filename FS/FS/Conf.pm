@@ -1038,6 +1038,9 @@ sub reason_type_options {
     'select_hash' => [
                        '%b %o, %Y' => 'Mon DDth, YYYY',
                        '%e %b %Y'  => 'DD Mon YYYY',
+                       '%m/%d/%Y'  => 'MM/DD/YYYY',
+                       '%d/%m/%Y'  => 'DD/MM/YYYY',
+		       '%Y/%m/%d'  => 'YYYY/MM/DD',
                      ],
   },
 
@@ -4138,6 +4141,13 @@ and customer address. Include units.',
   },
 
   {
+    'key'         => 'always_show_tax',
+    'section'     => 'invoicing',
+    'description' => 'Show a line for tax on the invoice even when the tax is zero.  Optionally provide text for the tax name to show.',
+    'type'        => [ qw(checkbox text) ],
+  },
+
+  {
     'key'         => 'address_standardize_method',
     'section'     => 'UI', #???
     'description' => 'Method for standardizing customer addresses.',
@@ -5442,6 +5452,21 @@ and customer address. Include units.',
     'section'     => 'UI',
     'description' => 'Enable time selection on payment and refund reports.',
     'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'authentication_module',
+    'section'     => 'UI',
+    'description' => '"Internal" is the default , which authenticates against the internal database.  "Legacy" is similar, but matches passwords against a legacy htpasswd file.',
+    'type'        => 'select',
+    'select_enum' => [qw( Internal Legacy )],
+  },
+
+  {
+    'key'         => 'external_auth-access_group-template_user',
+    'section'     => 'UI',
+    'description' => 'When using an external authentication module, specifies the default access groups for autocreated users, via a template user.',
+    'type'        => 'text',
   },
 
   { key => "apacheroot", section => "deprecated", description => "<b>DEPRECATED</b>", type => "text" },

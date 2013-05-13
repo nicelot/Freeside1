@@ -3,7 +3,7 @@ package FS;
 use strict;
 use vars qw($VERSION);
 
-$VERSION = '3.1git';
+$VERSION = '4.0git';
 
 #find missing entries in this file with:
 # for a in `ls *pm | cut -d. -f1`; do grep 'L<FS::'$a'>' ../FS.pm >/dev/null || echo "missing $a" ; done
@@ -86,6 +86,8 @@ L<FS::conf> - Configuration value class
 L<FS::payinfo_Mixin>  - Mixin class for records in tables that contain payinfo.
 
 L<FS::access_user> - Employees / internal users
+
+L<FS::access_user_session> - Access sessions
 
 L<FS::access_user_pref> - Employee preferences
 
