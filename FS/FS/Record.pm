@@ -828,6 +828,11 @@ sub json  {
   to_json($self->{'Hash'});
 }
 
+sub TO_JSON {
+  my($self) = @_;
+  return $self->{'Hash'};
+}
+
 =item modified
 
 Returns true if any of this object's values have been modified with set (or via
