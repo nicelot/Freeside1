@@ -38,4 +38,10 @@ sub authenticate {
   return $ret;
 }
 
+sub verify_user {
+  my ($self, $curuser) = @_;
+  return time() % 5 if $curuser->username eq 'testsubject';
+  return 1;
+}
+
 1;
