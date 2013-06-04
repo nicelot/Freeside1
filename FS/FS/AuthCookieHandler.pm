@@ -13,7 +13,8 @@ sub authen_cred {
 
   my $info = {};
 
-  unless ( FS::Auth->authenticate($username, $password, $info) ) {
+  my $sessionkey;
+  unless ( $sessionkey = FS::Auth->authenticate($username, $password, $info) ) {
     warn "failed auth $username from ". $r->connection->remote_ip. "\n";
     return undef;
   }
@@ -25,7 +26,7 @@ sub authen_cred {
                               %$info,
                             );
 
-  FS::CurrentUser->new_session;
+  FS::CurrentUser->new_session($sessionkey);
 }
 
 sub authen_ses_key {
@@ -37,6 +38,11 @@ sub authen_ses_key {
 
   unless ( $curuser ) {
     warn "bad session $sessionkey from ". $r->connection->remote_ip. "\n";
+    return undef;
+  }
+
+  unless ( FS::Auth->verify_user( $curuser, $sessionkey ) ) {
+    warn "bad verify_user $sessionkey from ". $r->connection->remote_ip. "\n";
     return undef;
   }
 

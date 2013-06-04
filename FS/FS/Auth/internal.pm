@@ -75,4 +75,8 @@ sub change_password_fields {
 
 }
 
+sub verify_user {
+  return 1;
+}
+
 1;
