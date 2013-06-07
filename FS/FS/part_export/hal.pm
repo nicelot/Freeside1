@@ -51,10 +51,19 @@ tie %options, 'Tie::IxHash',
     'desc'    => 'Real-time export to HAL',
     'options' => \%options,
     'notes'   => <<END,
-<p>HAL export, for provisioning accounts via HAL such as Bluehost dedicated
-or VPS services.</p>
+<p>HAL export, for provisioning accounts via HAL.</p>
 END
 );
+
+=head2 export_insert
+
+This method sets up service for a new hosting account and associates it
+with a customer.
+
+For VPS/Dedicated, this involves doing a server_reserve and capturing the
+hal_server_id.
+
+=cut
 
 sub export_insert {
     my $self = shift;
@@ -82,7 +91,6 @@ sub export_insert {
     
     my $hal_server_id = $resp->data->{'id'};
     # Do something with this hal_server_id - store it somewhere
-
 }
 
 sub export_delete {
