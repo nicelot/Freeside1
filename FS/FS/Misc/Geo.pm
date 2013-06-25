@@ -363,7 +363,7 @@ sub standardize_ezlocate {
   #}
 
   $class = 'Geo::EZLocate'; # use our own library
-  eval "use $class";
+  eval "use $class 0.02"; #Geo::EZLocate 0.02 for error handling
   die $@ if $@;
 
   my $userid = $conf->config('ezlocate-userid')
@@ -393,7 +393,7 @@ sub standardize_ezlocate {
     latitude    => $match->{MAT_LAT},
     longitude   => $match->{MAT_LON},
     censustract => $match->{FIPS_ST}.$match->{FIPS_CTY}.
-                   sprintf('%04.2f',$match->{CEN_TRCT}),
+                   sprintf('%07.2f',$match->{CEN_TRCT}),
     addr_clean  => 'Y',
   };
 }

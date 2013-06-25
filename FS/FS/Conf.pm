@@ -5,6 +5,7 @@ use Carp;
 use IO::File;
 use File::Basename;
 use MIME::Base64;
+use Locale::Currency;
 use FS::ConfItem;
 use FS::ConfDefaults;
 use FS::Conf_compat17;
@@ -866,6 +867,13 @@ sub reason_type_options {
   },
 
   {
+    'key'         => 'anniversary-rollback',
+    'section'     => 'billing',
+    'description' => 'When billing an anniversary package ordered after the 28th, roll the anniversary date back to the 28th instead of forward into the following month.',
+    'type'        => 'checkbox',
+  },
+
+  {
     'key'         => 'encryption',
     'section'     => 'billing',
     'description' => 'Enable encryption of credit cards and echeck numbers',
@@ -999,9 +1007,22 @@ sub reason_type_options {
   {
     'key'         => 'currency',
     'section'     => 'billing',
-    'description' => 'Currency',
+    'description' => 'Main accounting currency',
     'type'        => 'select',
     'select_enum' => [ '', qw( USD AUD CAD DKK EUR GBP ILS JPY NZD XAF ) ],
+  },
+
+  {
+    'key'         => 'currencies',
+    'section'     => 'billing',
+    'description' => 'Additional accepted currencies',
+    'type'        => 'select-sub',
+    'multiple'    => 1,
+    'options_sub' => sub { 
+                           map { $_ => code2currency($_) } all_currency_codes();
+			 },
+    'sort_sub'    => sub ($$) { $_[0] cmp $_[1]; },
+    'option_sub'  => sub { code2currency(shift); },
   },
 
   {
@@ -1056,13 +1077,6 @@ sub reason_type_options {
     'section'     => 'UI',
     'description' => 'Enable invoices deletions.  Be very careful!  Deleting an invoice will remove all traces that the invoice ever existed!  Normally, you would apply a credit against the invoice instead.',  #invoice voiding?
     'type'        => 'checkbox',
-  },
-
-  {
-    'key'         => 'deletepayments',
-    'section'     => 'billing',
-    'description' => 'Enable deletion of unclosed payments.  Really, with voids this is pretty much not recommended in any situation anymore.  Be very careful!  Only delete payments that were data-entry errors, not adjustments.  Optionally specify one or more comma-separated email addresses to be notified when a payment is deleted.',
-    'type'        => [qw( checkbox text )],
   },
 
   {
@@ -3407,13 +3421,6 @@ and customer address. Include units.',
   },
 
   {
-    'key'         => 'echeck-nonus',
-    'section'     => 'billing',
-    'description' => 'Disable ABA-format account checking for Electronic Check payment info',
-    'type'        => 'checkbox',
-  },
-
-  {
     'key'         => 'echeck-country',
     'section'     => 'billing',
     'description' => 'Format electronic check information for the specified country.',
@@ -5078,13 +5085,6 @@ and customer address. Include units.',
   },
 
   {
-    'key'         => 'maestro-status_test',
-    'section'     => 'UI',
-    'description' => 'Display a link to the maestro status test page on the customer view page',
-    'type'        => 'checkbox',
-  },
-
-  {
     'key'         => 'cust_main-custom_link',
     'section'     => 'UI',
     'description' => 'URL to use as source for the "Custom" tab in the View Customer page.  The customer number will be appended, or you can insert "$custnum" to have it inserted elsewhere.  "$agentnum" will be replaced with the agent number, and "$usernum" will be replaced with the employee number.',
@@ -5234,13 +5234,6 @@ and customer address. Include units.',
     'description' => 'Which module to use for customer status display.  The "Classic" module (the default) considers accounts with cancelled recurring packages but un-cancelled one-time charges Inactive.  The "Recurring" module considers those customers Cancelled.  Similarly for customers with suspended recurring packages but one-time charges.', #other differences?
     'type'        => 'select',
     'select_enum' => [ 'Classic', 'Recurring' ],
-  },
-
-  {
-    'key'         => 'cust_main-print_statement_link',
-    'section'     => 'UI',
-    'description' => 'Show a link to download a current statement for the customer.',
-    'type'        => 'checkbox',
   },
 
   { 

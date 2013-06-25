@@ -121,6 +121,8 @@ if ( -e $addl_handler_use_file ) {
   use HTML::Widgets::SelectLayers 0.07; #should go away in favor of
                                         #selectlayers.html
   use Locale::Country;
+  use Locale::Currency;
+  use Locale::Currency::Format;
   use Business::US::USPS::WebTools::AddressStandardization;
   use Geo::GoogleEarth::Pluggable;
   use LWP::UserAgent;
@@ -339,6 +341,11 @@ if ( -e $addl_handler_use_file ) {
   use FS::part_pkg_usage;
   use FS::cdr_cust_pkg_usage;
   use FS::part_pkg_msgcat;
+  use FS::svc_cable;
+  use FS::cable_device;
+  use FS::agent_currency;
+  use FS::currency_exchange;
+  use FS::part_pkg_currency;
   # Sammath Naur
 
   if ( $FS::Mason::addl_handler_use ) {
