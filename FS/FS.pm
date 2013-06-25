@@ -210,6 +210,8 @@ L<FS::svc_cert> - Certificate service class
 
 L<FS::svc_dish> - Dish network service class
 
+L<FS::svc_cable> - Cable service class
+
 L<FS::inventory_class> - Inventory classes
 
 L<FS::inventory_item> - Inventory items
@@ -234,6 +236,10 @@ L<FS::pkg_class> - Package class class
 L<FS::part_pkg> - Package definition class
 
 L<FS::part_pkg_msgcat> - Package definition localization class
+
+L<FS::part_pkg_currency> - Package definition local currency prices
+
+L<FS::currency_exchange> - Currency exchange rates
 
 L<FS::part_pkg_link> - Package definition link class
 
@@ -273,6 +279,8 @@ L<FS::usage_class> - Usage class class
 L<FS::sales> - Sales person class
 
 L<FS::agent> - Agent (reseller) class
+
+L<FS::agent_currency> - Agent (reseller) currency class
 
 L<FS::agent_pkg_class> - Agent (reseller) package class commission class
 

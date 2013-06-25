@@ -11,7 +11,6 @@ bin/freeside-count-active-customers
 bin/freeside-daily
 bin/freeside-deloutsource
 bin/freeside-deloutsourceuser
-bin/freeside-deluser
 bin/freeside-email
 bin/freeside-phonenum_list
 bin/freeside-queued
@@ -32,7 +31,6 @@ FS/Auth/external.pm
 FS/Auth/internal.pm
 FS/Auth/legacy.pm
 FS/CGI.pm
-FS/InitHandler.pm
 FS/ClientAPI.pm
 FS/ClientAPI_SessionCache.pm
 FS/ClientAPI_XMLRPC.pm
@@ -48,7 +46,6 @@ FS/Cron/backup.pm
 FS/Cron/bill.pm
 FS/Cron/vacuum.pm
 FS/Daemon.pm
-FS/Maestro.pm
 FS/Misc.pm
 FS/Record.pm
 FS/Report.pm
@@ -696,3 +693,15 @@ FS/part_pkg_msgcat.pm
 t/part_pkg_msgcat.t
 FS/access_user_session.pm
 t/access_user_session.t
+FS/svc_cable.pm
+t/svc_cable.t
+FS/cable_device.pm
+t/cable_device.t
+FS/h_svc_cable.pm
+t/h_svc_cable.t
+FS/agent_currency.pm
+t/agent_currency.t
+FS/currency_exchange.pm
+t/currency_exchange.t
+FS/part_pkg_currency.pm
+t/part_pkg_currency.t

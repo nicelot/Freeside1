@@ -207,10 +207,10 @@ foreach my $svcdb ( FS::part_svc->svc_tables() ) {
       ];
   }
 
-    $report_svc{"Advanced $lcsname reports"} = 
-        [ $fsurl."search/report_$svcdb.html", '' ]
-      if $svcdb =~ /^svc_(acct|broadband|hardware|phone)$/
-      && $curuser->access_right("Services: $name: Advanced search");
+  $report_svc{"Advanced $lcsname reports"} = 
+      [ $fsurl."search/report_$svcdb.html", '' ]
+    if $svcdb =~ /^svc_(acct|broadband|hardware|phone)$/
+    && $curuser->access_right("Services: $name: Advanced search");
 
   if ( $svcdb eq 'svc_phone' ) {
 
@@ -358,6 +358,9 @@ if( $curuser->access_right('Financial reports') ) {
   $report_financial{'Tax Liability (vendor tax data)'} = [ $fsurl.'search/report_newtax.html', 'Tax liability report (vendor tax data)' ]
     if $taxproducts;
 
+  # most sites don't need this but there isn't really a config to enable it
+  $report_financial{'E911 Fee Summary'} = [ $fsurl.'search/report_e911.html', 'E911 fee summary' ];
+
   $report_financial{'Customer Accounting Summary'} = [ $fsurl.'search/report_customer_accounting_summary.html', 'Customer accounting summary report' ];
 
 } elsif($curuser->access_right('Receivables report')) {
@@ -497,6 +500,7 @@ tie my %config_broadband, 'Tie::IxHash',
 tie my %config_phone, 'Tie::IxHash',
   'View/Edit phone device types' => [ $fsurl.'browse/part_device.html', 'Phone device types' ],
   'View/Edit bulk DID vendors' => [ $fsurl.'browse/did_vendor.html', 'Bulk DID vendors' ],
+  'View/Edit Carriers' => [ $fsurl.'browse/cdr_carrier.html', 'Carriers' ],
 ;
 
 tie my %config_radius, 'Tie::IxHash',
@@ -583,8 +587,10 @@ $config_billing{'Billing events'} = [ $fsurl.'browse/part_event.html', 'Billing 
 if ( $curuser->access_right('Configuration') ) {
   #$config_billing{'Invoice events'}         = [ $fsurl.'browse/part_bill_event.cgi', 'Deprecated, old-style actions for overdue invoices' ];
   $config_billing{'Invoice templates'}      = [ $fsurl.'browse/invoice_template.html', 'Edit templates for HTML, plaintext and typeset invoices' ];
+  $config_billing{'separator'} = ''; #its a separator!
   $config_billing{'Prepaid cards'}          = [ $fsurl.'search/prepay_credit.html', 'View outstanding cards, generate new cards' ];
   $config_billing{'Call rates and regions'} = [ \%config_billing_rates, 'Manage rate plans, regions and prefixes for VoIP and call billing' ];
+  $config_billing{'separator2'} = ''; #its a separator!
 
   my $config_taxes_name = 'Locales and tax rates'.
                           ( $conf->exists('enable_taxproducts')
@@ -596,6 +602,12 @@ if ( $curuser->access_right('Configuration') ) {
      if $conf->exists('enable_taxproducts');
   $config_billing{'Tax classes'} = [ $fsurl. 'browse/part_pkg_taxclass.html', 'Tax classes' ];
 
+  if ( $conf->config('currencies') ) {
+    $config_billing{'separator3'} = ''; #its a separator!
+    $config_billing{'Exchange rates'} = [ $fsurl.'edit/currency_exchange.html', 'Currency exchange rates' ];
+  }
+
+  $config_billing{'separator4'} = ''; #its a separator!
   $config_billing{'Credit reasons'}  = [ $fsurl.'browse/reason.html?class=R', 'Credit reasons explain why a credit was issued.' ];
   $config_billing{'Credit reason types'}  = [ $fsurl.'browse/reason_type.html?class=R', 'Credit reason types define groups of reasons.' ];
 }

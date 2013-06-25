@@ -255,7 +255,8 @@ The following options are available:
 
 =item change
 
-If set true, supresses any referral credit to a referring customer.
+If set true, supresses actions that should only be taken for new package
+orders.  (Currently this includes: intro periods when delay_setup is on.)
 
 =item options
 
@@ -303,8 +304,12 @@ sub insert {
     }
   }
 
-  my $free_days = $part_pkg->option('free_days',1);
-  if ( $free_days && $part_pkg->option('delay_setup',1) ) { #&& !$self->start_date
+  if (    ! $options{'change'}
+       && ( my $free_days = $part_pkg->option('free_days',1) )
+       && $part_pkg->option('delay_setup',1)
+       #&& ! $self->start_date
+     )
+  {
     my ($mday,$mon,$year) = (localtime(time) )[3,4,5];
     #my $start_date = ($self->start_date || timelocal(0,0,0,$mday,$mon,$year)) + 86400 * $free_days;
     my $start_date = timelocal(0,0,0,$mday,$mon,$year) + 86400 * $free_days;
@@ -576,9 +581,12 @@ sub replace {
 
   }
 
-  my $error = $new->SUPER::replace($old,
-                                   $options->{options} ? $options->{options} : ()
-                                  );
+  my $error =  $new->export_pkg_change($old)
+            || $new->SUPER::replace( $old,
+                                     $options->{options}
+                                       ? $options->{options}
+                                       : ()
+                                   );
   if ( $error ) {
     $dbh->rollback if $oldAutoCommit;
     return $error;
@@ -1917,6 +1925,18 @@ sub change {
     }
   }
 
+  # transfer (copy) invoice details
+  foreach my $detail ($self->cust_pkg_detail) {
+    my $new_detail = FS::cust_pkg_detail->new({ $detail->hash });
+    $new_detail->set('pkgdetailnum', '');
+    $new_detail->set('pkgnum', $cust_pkg->pkgnum);
+    $error = $new_detail->insert;
+    if ( $error ) {
+      $dbh->rollback if $oldAutoCommit;
+      return "Error transferring package notes: $error";
+    }
+  }
+
   # Order any supplemental packages.
   my $part_pkg = $cust_pkg->part_pkg;
   my @old_supp_pkgs = $self->supplemental_pkgs;
@@ -2186,6 +2206,18 @@ sub calc_recur {
   $self->part_pkg->calc_recur($self, @_);
 }
 
+=item base_setup
+
+Calls the I<base_setup> of the FS::part_pkg object associated with this billing
+item.
+
+=cut
+
+sub base_setup {
+  my $self = shift;
+  $self->part_pkg->base_setup($self, @_);
+}
+
 =item base_recur
 
 Calls the I<base_recur> of the FS::part_pkg object associated with this billing
@@ -2336,6 +2368,26 @@ sub num_cust_event {
   my $sth = dbh->prepare($sql) or die  dbh->errstr. " preparing $sql"; 
   $sth->execute($self->pkgnum) or die $sth->errstr. " executing $sql";
   $sth->fetchrow_arrayref->[0];
+}
+
+=item part_pkg_currency_option OPTIONNAME
+
+Returns a two item list consisting of the currency of this customer, if any,
+and a value for the provided option.  If the customer has a currency, the value
+is the option value the given name and the currency (see
+L<FS::part_pkg_currency>).  Otherwise, if the customer has no currency, is the
+regular option value for the given name (see L<FS::part_pkg_option>).
+
+=cut
+
+sub part_pkg_currency_option {
+  my( $self, $optionname ) = @_;
+  my $part_pkg = $self->part_pkg;
+  if ( my $currency = $self->cust_main->currency ) {
+    ($currency, $part_pkg->part_pkg_currency_option($currency, $optionname) );
+  } else {
+    ('', $part_pkg->option($optionname) );
+  }
 }
 
 =item cust_svc [ SVCPART ] (old, deprecated usage)
@@ -3191,6 +3243,46 @@ sub transfer {
   return $remaining;
 }
 
+=item grab_svcnums SVCNUM, SVCNUM ...
+
+Change the pkgnum for the provided services to this packages.  If there is an
+error, returns the error, otherwise returns false.
+
+=cut
+
+sub grab_svcnums {
+  my $self = shift;
+  my @svcnum = @_;
+
+  local $SIG{HUP} = 'IGNORE';
+  local $SIG{INT} = 'IGNORE';
+  local $SIG{QUIT} = 'IGNORE';
+  local $SIG{TERM} = 'IGNORE';
+  local $SIG{TSTP} = 'IGNORE';
+  local $SIG{PIPE} = 'IGNORE';
+
+  my $oldAutoCommit = $FS::UID::AutoCommit;
+  local $FS::UID::AutoCommit = 0;
+  my $dbh = dbh;
+
+  foreach my $svcnum (@svcnum) {
+    my $cust_svc = qsearchs('cust_svc', { svcnum=>$svcnum } ) or do {
+      $dbh->rollback if $oldAutoCommit;
+      return "unknown svcnum $svcnum";
+    };
+    $cust_svc->pkgnum( $self->pkgnum );
+    my $error = $cust_svc->replace;
+    if ( $error ) {
+      $dbh->rollback if $oldAutoCommit;
+      return $error;
+    }
+  }
+
+  $dbh->commit or die $dbh->errstr if $oldAutoCommit;
+  '';
+
+}
+
 =item reexport
 
 This method is deprecated.  See the I<depend_jobnum> option to the insert and
@@ -3198,6 +3290,8 @@ order_pkgs methods in FS::cust_main for a better way to defer provisioning.
 
 =cut
 
+#looks like this is still used by the order_pkg and change_pkg methods in
+# ClientAPI/MyAccount, need to look into those before removing
 sub reexport {
   my $self = shift;
 
@@ -3221,6 +3315,39 @@ sub reexport {
         $dbh->rollback if $oldAutoCommit;
         return $error;
       }
+    }
+  }
+
+  $dbh->commit or die $dbh->errstr if $oldAutoCommit;
+  '';
+
+}
+
+=item export_pkg_change OLD_CUST_PKG
+
+Calls the "pkg_change" export action for all services attached to this package.
+
+=cut
+
+sub export_pkg_change {
+  my( $self, $old )  = ( shift, shift );
+
+  local $SIG{HUP} = 'IGNORE';
+  local $SIG{INT} = 'IGNORE';
+  local $SIG{QUIT} = 'IGNORE';
+  local $SIG{TERM} = 'IGNORE';
+  local $SIG{TSTP} = 'IGNORE';
+  local $SIG{PIPE} = 'IGNORE';
+
+  my $oldAutoCommit = $FS::UID::AutoCommit;
+  local $FS::UID::AutoCommit = 0;
+  my $dbh = dbh;
+
+  foreach my $svc_x ( map $_->svc_x, $self->cust_svc ) {
+    my $error = $svc_x->export('pkg_change', $self, $old);
+    if ( $error ) {
+      $dbh->rollback if $oldAutoCommit;
+      return $error;
     }
   }
 

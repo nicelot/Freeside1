@@ -58,6 +58,7 @@ use FS::cust_main_exemption;
 use FS::cust_tax_adjustment;
 use FS::cust_tax_location;
 use FS::agent;
+use FS::agent_currency;
 use FS::cust_main_invoice;
 use FS::cust_tag;
 use FS::prepay_credit;
@@ -972,47 +973,6 @@ sub insert_cust_pay {
 
 }
 
-=item reexport
-
-This method is deprecated.  See the I<depend_jobnum> option to the insert and
-order_pkgs methods for a better way to defer provisioning.
-
-Re-schedules all exports by calling the B<reexport> method of all associated
-packages (see L<FS::cust_pkg>).  If there is an error, returns the error;
-otherwise returns false.
-
-=cut
-
-sub reexport {
-  my $self = shift;
-
-  carp "WARNING: FS::cust_main::reexport is deprectated; ".
-       "use the depend_jobnum option to insert or order_pkgs to delay export";
-
-  local $SIG{HUP} = 'IGNORE';
-  local $SIG{INT} = 'IGNORE';
-  local $SIG{QUIT} = 'IGNORE';
-  local $SIG{TERM} = 'IGNORE';
-  local $SIG{TSTP} = 'IGNORE';
-  local $SIG{PIPE} = 'IGNORE';
-
-  my $oldAutoCommit = $FS::UID::AutoCommit;
-  local $FS::UID::AutoCommit = 0;
-  my $dbh = dbh;
-
-  foreach my $cust_pkg ( $self->ncancelled_pkgs ) {
-    my $error = $cust_pkg->reexport;
-    if ( $error ) {
-      $dbh->rollback if $oldAutoCommit;
-      return $error;
-    }
-  }
-
-  $dbh->commit or die $dbh->errstr if $oldAutoCommit;
-  '';
-
-}
-
 =item delete [ OPTION => VALUE ... ]
 
 This deletes the customer.  If there is an error, returns the error, otherwise
@@ -1757,6 +1717,7 @@ sub check {
     || $self->ut_flag('invoice_noemail')
     || $self->ut_flag('message_noemail')
     || $self->ut_enum('locale', [ '', FS::Locales->locales ])
+    || $self->ut_currencyn('currency')
   ;
 
   my $company = $self->company;
@@ -1770,8 +1731,17 @@ sub check {
     if $error =~ /^Illegal or empty \(numeric\) refnum: /;
   return $error if $error;
 
-  return "Unknown agent"
-    unless qsearchs( 'agent', { 'agentnum' => $self->agentnum } );
+  my $agent = qsearchs( 'agent', { 'agentnum' => $self->agentnum } )
+    or return "Unknown agent";
+
+  if ( $self->currency ) {
+    my $agent_currency = qsearchs( 'agent_currency', {
+      'agentnum' => $agent->agentnum,
+      'currency' => $self->currency,
+    })
+      or return "Agent ". $agent->agent.
+                " not permitted to offer ".  $self->currency. " invoicing";
+  }
 
   return "Unknown refnum"
     unless qsearchs( 'part_referral', { 'refnum' => $self->refnum } );
@@ -5015,42 +4985,6 @@ sub process_bill_and_collect {
   $param->{'retry'} = 1;
 
   $cust_main->bill_and_collect( %$param );
-}
-
-=item process_censustract_update CUSTNUM
-
-Queueable function to update the census tract to the current year (as set in 
-the 'census_year' configuration variable) and retrieve the new tract code.
-
-=cut
-
-sub process_censustract_update { 
-  eval "use FS::Misc::Geo qw(get_censustract)";
-  die $@ if $@;
-  my $custnum = shift;
-  my $cust_main = qsearchs( 'cust_main', { custnum => $custnum })
-      or die "custnum '$custnum' not found!\n";
-
-  my $new_year = $conf->config('census_year') or return;
-  my $new_tract = get_censustract({ $cust_main->location_hash }, $new_year);
-  if ( $new_tract =~ /^\d/ ) {
-    # then it's a tract code
-        $cust_main->set('censustract', $new_tract);
-    $cust_main->set('censusyear',  $new_year);
-
-    local($ignore_expired_card) = 1;
-    local($ignore_illegal_zip) = 1;
-    local($ignore_banned_card) = 1;
-    local($skip_fuzzyfiles) = 1;
-    local($import) = 1; #prevent automatic geocoding (need its own variable?)
-    my $error = $cust_main->replace;
-    die $error if $error;
-  }
-  else {
-    # it's an error message
-    die $new_tract;
-  }
-  return;
 }
 
 #starting to take quite a while for big dbs
