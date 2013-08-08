@@ -236,6 +236,10 @@ sub dbdef_dist {
 
     }
 
+    my $primary_key_col = $tableobj->column($tableobj->primary_key)
+      or die "$table: primary key declared as ". $tableobj->primary_key.
+             ", but no column of that name\n";
+
     my $historynum_type = ( $tableobj->column($tableobj->primary_key)->type
                               =~ /^(bigserial|bigint|int8)$/i
                                 ? 'bigserial'
@@ -841,7 +845,6 @@ sub tables_hashref {
         'locationnum',              'int',     '',      '', '', '', #redundant
         'amount',             @money_type,                  '', '',
         'currency',                'char', 'NULL',       3, '', '',
-        'amount',             @money_type,                  '', '',
         'taxable_billpkgnum',       'int', 'NULL',      '', '', '',
       ],
       'primary_key' => 'billpkgtaxlocationnum',
@@ -949,6 +952,7 @@ sub tables_hashref {
         'locationnum',              'int',     '',      '', '', '', #redundant?
         'amount',             @money_type,                  '', '',
         'currency',                'char', 'NULL',       3, '', '',
+        'taxable_billpkgnum',       'int', 'NULL',      '', '', '',
       ],
       'primary_key' => 'billpkgtaxlocationnum',
       'unique' => [],
@@ -1084,6 +1088,8 @@ sub tables_hashref {
         'ship_fax',      'varchar', 'NULL', 12, '', '', 
         'ship_mobile',   'varchar', 'NULL', 12, '', '', 
         'currency',         'char', 'NULL',  3, '', '',
+
+        #deprecated, info moved to cust_payby
         'payby',    'char', '',     4, '', '', 
         'payinfo',  'varchar', 'NULL', 512, '', '', 
         'paycvv',   'varchar', 'NULL', 512, '', '', 
@@ -1097,6 +1103,7 @@ sub tables_hashref {
         'paystate', 'varchar', 'NULL', $char_d, '', '', 
         'paytype',  'varchar', 'NULL', $char_d, '', '', 
         'payip',    'varchar', 'NULL', 15, '', '', 
+
         'geocode',  'varchar', 'NULL', 20,  '', '',
         'censustract', 'varchar', 'NULL', 20,  '', '', # 7 to save space?
         'censusyear', 'char', 'NULL', 4, '', '',
@@ -1136,6 +1143,31 @@ sub tables_hashref {
                    [ 'payby' ], [ 'paydate' ],
                    [ 'archived' ],
                  ],
+    },
+
+    'cust_payby' => {
+      'columns' => [
+        'custpaybynum', 'serial',     '',        '', '', '', 
+        'custnum',         'int',     '',        '', '', '',
+        'weight',          'int',     '',        '', '', '', 
+        'payby',          'char',     '',         4, '', '', 
+        'payinfo',     'varchar', 'NULL',       512, '', '', 
+        'paycvv',      'varchar', 'NULL',       512, '', '', 
+        'paymask',     'varchar', 'NULL',   $char_d, '', '', 
+        #'paydate',   @date_type, '', '', 
+        'paydate',     'varchar', 'NULL',        10, '', '', 
+        'paystart_month',  'int', 'NULL',        '', '', '', 
+        'paystart_year',   'int', 'NULL',        '', '', '', 
+        'payissue',    'varchar', 'NULL',         2, '', '', 
+        'payname',     'varchar', 'NULL', 2*$char_d, '', '', 
+        'paystate',    'varchar', 'NULL',   $char_d, '', '', 
+        'paytype',     'varchar', 'NULL',   $char_d, '', '', 
+        'payip',       'varchar', 'NULL',        15, '', '', 
+        'locationnum',     'int', 'NULL',        '', '', '',
+      ],
+      'primary_key' => 'custpaybynum',
+      'unique'      => [],
+      'index'       => [ [ 'custnum' ] ],
     },
 
     'cust_recon' => {  # (some sort of not-well understood thing for OnPac)
@@ -1230,7 +1262,7 @@ sub tables_hashref {
         'emailaddress',   'varchar', '', $char_d, '', '',
       ],
       'primary_key' => 'contactemailnum',
-      'unique'      => [ [ 'emailaddress' ], ],
+      'unique'      => [ [ 'contactnum', 'emailaddress' ], ],
       'index'       => [],
     },
 
@@ -1576,6 +1608,9 @@ sub tables_hashref {
         #'cust_balance', @money_type,            '', '',
         'paynum',       'int',     'NULL',  '', '', '',
         'jobnum',    'bigint',     'NULL',  '', '', '', 
+        'invnum',       'int',     'NULL',  '', '', '',
+        'manual',       'char',    'NULL',   1, '', '',
+        'discount_term','int',     'NULL',  '', '', '',
       ],
       'primary_key' => 'paypendingnum',
       'unique'      => [ [ 'payunique' ] ],
@@ -1795,6 +1830,7 @@ sub tables_hashref {
         'waive_setup',        'char', 'NULL',  1, '', '', 
         'recur_show_zero',    'char', 'NULL',  1, '', '',
         'setup_show_zero',    'char', 'NULL',  1, '', '',
+        'change_to_pkgnum',    'int', 'NULL', '', '', '',
       ],
       'primary_key' => 'pkgnum',
       'unique' => [],
@@ -2047,6 +2083,7 @@ sub tables_hashref {
         'setup_show_zero',  'char', 'NULL',  1, '', '',
         'successor',     'int',     'NULL', '', '', '',
         'family_pkgpart','int',     'NULL', '', '', '',
+        'delay_start',   'int',     'NULL', '', '', '',
       ],
       'primary_key' => 'pkgpart',
       'unique' => [],
@@ -2188,16 +2225,17 @@ sub tables_hashref {
 
     'pkg_svc' => {
       'columns' => [
-        'pkgsvcnum',  'serial', '',  '', '', '', 
-        'pkgpart',    'int',    '',   '', '', '', 
-        'svcpart',    'int',    '',   '', '', '', 
-        'quantity',   'int',    '',   '', '', '', 
-        'primary_svc','char', 'NULL',  1, '', '', 
-        'hidden',     'char', 'NULL',  1, '', '',
+        'pkgsvcnum',   'serial',    '', '', '', '', 
+        'pkgpart',        'int',    '', '', '', '', 
+        'svcpart',        'int',    '', '', '', '', 
+        'quantity',       'int',    '', '', '', '', 
+        'primary_svc',   'char', 'NULL', 1, '', '', 
+        'hidden',        'char', 'NULL', 1, '', '',
+        'bulk_skip',     'char', 'NULL', 1, '', '',
       ],
       'primary_key' => 'pkgsvcnum',
-      'unique' => [ ['pkgpart', 'svcpart'] ],
-      'index' => [ ['pkgpart'], ['quantity'] ],
+      'unique'      => [ ['pkgpart', 'svcpart'] ],
+      'index'       => [ ['pkgpart'], ['quantity'] ],
     },
 
     'part_referral' => {
@@ -3780,7 +3818,7 @@ sub tables_hashref {
         'lnp_other_provider_account', 'varchar', 'NULL', $char_d, '', '',
         'lnp_reject_reason',          'varchar', 'NULL', $char_d, '', '',
         'sms_carrierid',                  'int', 'NULL',      '', '', '',
-        'sms_account',                'varchar', 'NULL',      '', '', '',
+        'sms_account',                'varchar', 'NULL', $char_d, '', '',
         'max_simultaneous',               'int', 'NULL',      '', '', '',
       ],
       'primary_key' => 'svcnum',
@@ -4222,6 +4260,66 @@ sub tables_hashref {
       'primary_key' => 'devicenum',
       'unique' => [ [ 'mac_addr' ], ],
       'index'  => [ [ 'devicepart' ], [ 'svcnum' ], ],
+    },
+
+    'vend_main' => {
+      'columns' => [
+        'vendnum',   'serial',     '',      '', '', '',
+        'vendname', 'varchar',     '', $char_d, '', '',
+        'classnum',     'int',     '',      '', '', '',
+        'disabled',    'char', 'NULL',       1, '', '', 
+      ],
+      'primary_key' => 'vendnum',
+      'unique'      => [ ['vendname', 'disabled'] ],
+      'index'       => [],
+    },
+
+    'vend_class' => {
+      'columns' => [
+        'classnum',     'serial',     '',      '', '', '', 
+        'classname',   'varchar',     '', $char_d, '', '', 
+        'disabled',       'char', 'NULL',       1, '', '', 
+      ],
+      'primary_key' => 'classnum',
+      'unique'      => [],
+      'index'       => [ ['disabled'] ],
+    },
+
+    'vend_bill' => {
+      'columns' => [
+        'vendbillnum',    'serial',     '',      '', '', '', 
+        'vendnum',           'int',     '',      '', '', '', 
+        '_date',        @date_type,                  '', '', 
+        'charged',     @money_type,                  '', '', 
+      ],
+      'primary_key' => 'vendbillnum',
+      'unique' => [],
+      'index' => [ ['vendnum'], ['_date'], ],
+    },
+
+    'vend_pay' => {
+      'columns' => [
+        'vendpaynum',   'serial',    '',       '', '', '',
+        'vendnum',         'int',    '',       '', '', '', 
+        '_date',     @date_type,                   '', '', 
+        'paid',      @money_type,                  '', '', 
+      ],
+      'primary_key' => 'vendpaynum',
+      'unique' => [],
+      'index' => [ [ 'vendnum' ], [ '_date' ], ],
+    },
+
+    'vend_bill_pay' => {
+      'columns' => [
+        'vendbillpaynum', 'serial',     '',   '', '', '', 
+        'vendbillnum',       'int',     '',   '', '', '', 
+        'vendpaynum',        'int',     '',   '', '', '', 
+        'amount',  @money_type, '', '', 
+        #? '_date',   @date_type, '', '', 
+      ],
+      'primary_key' => 'vendbillpaynum',
+      'unique' => [],
+      'index' => [ [ 'vendbillnum' ], [ 'vendpaynum' ] ],
     },
 
     %{ tables_hashref_torrus() },
