@@ -177,7 +177,7 @@ sub myconnect {
                                              'ChopBlanks'         => 1,
                                              'ShowErrorStatement' => 1,
                                              'pg_enable_utf8'     => 1,
-                                             #'mysql_enable_utf8'  => 1,
+                                             'mysql_enable_utf8'  => 1,
                                            }
                            )
     or die "DBI->connect error: $DBI::errstr\n";
