@@ -42,7 +42,7 @@ Example:
             len = args.length - 1;
         }
         for (var i = 0; i < len; i++) 
-            content = content + "&arg=" + escape(args[i]);
+            content = content + "&arg=" + encode(args[i]);
         content = content.replace( /[+]/g, '%2B'); // fix unescaped plus signs 
 
         if ( '<%$method%>' == 'GET' ) {
@@ -93,7 +93,7 @@ Example:
 
         if ( '<%$method%>' == 'POST' ) {
 
-          xmlhttp.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+          xmlhttp.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded;charset=UTF-8');
           xmlhttp.send(content);
 
         } else {

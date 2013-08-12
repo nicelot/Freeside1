@@ -52,6 +52,7 @@ $InTable => 0
 %defaults => ()
 </%ARGS>
 <%INIT>
+my $WillResolveObj = $TicketObj->WillResolveObj;
 unless ( @fields ) {
     @fields = (
         {   name => 'Subject',
@@ -65,6 +66,18 @@ unless ( @fields ) {
                 Default => $defaults{'Status'} || undef,
                 TicketObj => $TicketObj,
                 QueueObj => $TicketObj->QueueObj,
+                onchange => 'changeStatus()',
+            },
+        },
+        {   name => 'Resolve this Ticket on',
+            comp => '/Elements/SelectDate',
+            args => {
+                menu_prefix => 'WillResolve',
+                Default => $ARGS{'WillResolve'} || 
+                           ($WillResolveObj->Unix > 0 ?
+                              $WillResolveObj->Date : ''),
+                current => 0,
+                ShowTime => 0,
             },
         },
         {   name => 'Queue',
@@ -141,4 +154,19 @@ for my $field (@fields) {
 % unless ($InTable) {
 </table>
 % }
-
+<script type="text/javascript">
+function changeStatus() {
+  var Status_select = document.getElementById('Status');
+  var x = Status_select.options[Status_select.selectedIndex].value;
+  var text = document.getElementById('WillResolve_Date');
+  var button = document.getElementById('WillResolve_Date_date_button');
+  if (x == 'resolved' || x == 'rejected' || x == 'deleted') {
+    text.disabled = true;
+    button.style.display = 'none';
+  }
+  else {
+    text.disabled = false;
+    button.style.display = 'inline';
+  }
+}
+</script>

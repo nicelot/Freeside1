@@ -1066,16 +1066,9 @@ sub reason_type_options {
   },
 
   {
-    'key'         => 'deletecustomers',
-    'section'     => 'UI',
-    'description' => 'Enable customer deletions.  Be very careful!  Deleting a customer will remove all traces that the customer ever existed!  It should probably only be used when auditing a legacy database.  Normally, you cancel all of a customers\' packages if they cancel service.',
-    'type'        => 'checkbox',
-  },
-
-  {
     'key'         => 'deleteinvoices',
     'section'     => 'UI',
-    'description' => 'Enable invoices deletions.  Be very careful!  Deleting an invoice will remove all traces that the invoice ever existed!  Normally, you would apply a credit against the invoice instead.',  #invoice voiding?
+    'description' => 'Enable invoices deletions.  Be very careful!  Deleting an invoice will remove all traces that the invoice ever existed!  Normally, you would void or apply a credit against the invoice instead.',
     'type'        => 'checkbox',
   },
 
@@ -1535,16 +1528,24 @@ and customer address. Include units.',
   },
 
   { 
-    'key'         => 'invoice_include_aging',
-    'section'     => 'invoicing',
-    'description' => 'Show an aging line after the prior balance section.  Only valud when invoice_sections is enabled.',
-    'type'        => 'checkbox',
-  },
-
-  { 
     'key'         => 'invoice_sections',
     'section'     => 'invoicing',
     'description' => 'Split invoice into sections and label according to package category when enabled.',
+    'type'        => 'checkbox',
+    'per_agent'   => 1,
+  },
+
+  { 
+    'key'         => 'invoice_include_aging',
+    'section'     => 'invoicing',
+    'description' => 'Show an aging line after the prior balance section.  Only valid when invoice_sections is enabled.',
+    'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'invoice_sections_by_location',
+    'section'     => 'invoicing',
+    'description' => 'Divide invoice into sections according to service location.  Currently, this overrides sectioning by package category.',
     'type'        => 'checkbox',
     'per_agent'   => 1,
   },
@@ -2276,6 +2277,13 @@ and customer address. Include units.',
     'section'     => 'self-service',
     'description' => 'Run a standalone self-service XML-RPC server on the backend (on port 8080).',
     'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'selfservice-timeout',
+    'section'     => 'self-service',
+    'description' => 'Timeout for the self-service login cookie, in seconds.  Defaults to 1 hour.',
+    'type'        => 'text',
   },
 
   {
@@ -3693,7 +3701,7 @@ and customer address. Include units.',
   {
     'key'         => 'batchconfig-eft_canada',
     'section'     => 'billing',
-    'description' => 'Configuration for EFT Canada batching, four lines: 1. SFTP username, 2. SFTP password, 3. Transaction code, 4. Number of days to delay process date.',
+    'description' => 'Configuration for EFT Canada batching, four lines: 1. SFTP username, 2. SFTP password, 3. Transaction code, 4. Number of days to delay process date.  If you are using separate per-agent batches (batch-spoolagent), you must set this option separately for each agent, as the global setting will be ignored.',
     'type'        => 'textarea',
     'per_agent'   => 1,
   },
@@ -4120,6 +4128,13 @@ and customer address. Include units.',
   },
 
   {
+    'key'         => 'previous_balance-section',
+    'section'     => 'invoicing',
+    'description' => 'Show previous invoice balances in a separate invoice section.  Does not require invoice_sections to be enabled.',
+    'type'        => 'checkbox',
+  },
+
+  {
     'key'         => 'previous_balance-summary_only',
     'section'     => 'invoicing',
     'description' => 'Only show a single line summarizing the total previous balance rather than one line per invoice.',
@@ -4345,6 +4360,13 @@ and customer address. Include units.',
     'key'         => 'order_pkg-no_start_date',
     'section'     => 'UI',
     'description' => 'Don\'t set a default start date for new packages.',
+    'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'part_pkg-delay_start',
+    'section'     => '',
+    'description' => 'Enabled "delayed start" option for packages.',
     'type'        => 'checkbox',
   },
 
@@ -4651,6 +4673,13 @@ and customer address. Include units.',
     'section'     => 'self-service',
     'description' => 'Link for the login banner.',
     'type'        => 'text',
+  },
+
+  {
+    'key'         => 'ng_selfservice-menu',
+    'section'     => 'self-service',
+    'description' => 'Custom menu for the next-generation self-service interface.  Each line is in the format "link Label", for example "main.php Home".  Sub-menu items are listed on subsequent lines.  Blank lines terminate the submenu.', #more docs/examples would be helpful
+    'type'        => 'textarea',
   },
 
   {

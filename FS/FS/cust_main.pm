@@ -6,6 +6,7 @@ use base qw( FS::cust_main::Packages FS::cust_main::Status
              FS::cust_main::NationalID
              FS::cust_main::Billing FS::cust_main::Billing_Realtime
              FS::cust_main::Billing_Discount
+             FS::cust_main::Billing_ThirdParty
              FS::cust_main::Location
              FS::otaker_Mixin FS::payinfo_Mixin FS::cust_main_Mixin
              FS::geocode_Mixin FS::Quotable_Mixin
@@ -1790,6 +1791,8 @@ sub check {
   
   }
 
+  ### start of stuff moved to cust_payby
+
   #$self->payby =~ /^(CARD|DCRD|CHEK|DCHK|LECB|BILL|COMP|PREPAY|CASH|WEST|MCRD)$/
   #  or return "Illegal payby: ". $self->payby;
   #$self->payby($1);
@@ -1998,6 +2001,8 @@ sub check {
       or return gettext('illegal_name'). " payname: ". $self->payname;
     $self->payname($1);
   }
+
+  ### end of stuff moved to cust_payby
 
   return "Please select an invoicing locale"
     if ! $self->locale
@@ -4135,14 +4140,17 @@ sub cust_statuscolor {
   __PACKAGE__->statuscolors->{$self->cust_status};
 }
 
-=item tickets
+=item tickets [ STATUS ]
 
 Returns an array of hashes representing the customer's RT tickets.
+
+An optional status (or arrayref or hashref of statuses) may be specified.
 
 =cut
 
 sub tickets {
   my $self = shift;
+  my $status = ( @_ && $_[0] ) ? shift : '';
 
   my $num = $conf->config('cust_main-max_tickets') || 10;
   my @tickets = ();
@@ -4150,7 +4158,12 @@ sub tickets {
   if ( $conf->config('ticket_system') ) {
     unless ( $conf->config('ticket_system-custom_priority_field') ) {
 
-      @tickets = @{ FS::TicketSystem->customer_tickets($self->custnum, $num) };
+      @tickets = @{ FS::TicketSystem->customer_tickets( $self->custnum,
+                                                        $num,
+                                                        undef,
+                                                        $status,
+                                                      )
+                  };
 
     } else {
 
@@ -4162,6 +4175,7 @@ sub tickets {
           @{ FS::TicketSystem->customer_tickets( $self->custnum,
                                                  $num - scalar(@tickets),
                                                  $priority,
+                                                 $status,
                                                )
            };
       }
