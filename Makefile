@@ -3,13 +3,14 @@
 #solaris and perhaps other very weirdass /bin/sh
 #SHELL="/bin/ksh"
 
-#DB_TYPE = Pg
-DB_TYPE = mysql
+DB_TYPE = Pg
+#DB_TYPE = mysql
 
 DB_USER = freeside
-DB_PASSWORD=test
+DB_PASSWORD=magic
 
-DATASOURCE = DBI:${DB_TYPE}:dbname=freeside;host=casmysql.alpha.bluehost.com
+#DATASOURCE = DBI:${DB_TYPE}:dbname=freeside;host=casmysql.alpha.bluehost.com:charset=utf8
+DATASOURCE = DBI:${DB_TYPE}:dbname=freeside2;host=postbench.skynet.alpha.bluehost.com:charset=utf8
 
 #changable now (some things which should go to the others still go to CONF)
 FREESIDE_CONF = /usr/local/etc/freeside
