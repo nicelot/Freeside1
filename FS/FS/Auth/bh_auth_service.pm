@@ -123,20 +123,19 @@ sub check_permissions {
           warn "error inserting access_usergroup: $error";
         };
       }
+      foreach my $tmpl_access_usergroup (@original_usergroups) {
+        # removes any old permissions that this user had at one point.
+        next if $tmpl_access_usergroup->groupnum ~~ @allowed_groupnums;
+        warn "Removing permission from $username -> ".$tmpl_access_usergroup->groupnum;
+        my $error = $tmpl_access_usergroup->delete;
+        if ( $error ) {
+          #shouldn't happen, but seems better to proceed than to die
+          warn "error deleting access_usergroup: $error";
+        }
+      }
     } else {
       # no template found, remove all user access
-      warn "Template $template_user not found";
-    }
-    foreach my $tmpl_access_usergroup (@original_usergroups) {
-      # removes any old permissions that this user had at one point.
-      # If no template is found it removes ALL permissions.
-      next if $tmpl_access_usergroup->groupnum ~~ @allowed_groupnums;
-      warn "Removing permission from $username -> ".$tmpl_access_usergroup->groupnum;
-      my $error = $tmpl_access_usergroup->delete;
-      if ( $error ) {
-        #shouldn't happen, but seems better to proceed than to die
-        warn "error deleting access_usergroup: $error";
-      }
+      warn "Template $template_user not found for $username";
     }
   }
   return 0 if defined $disabled && $disabled eq 'Y';
@@ -155,6 +154,7 @@ sub find_template {
   if ($group eq 'Developers' && $ret->{data}->{emp_info}->{permissions}->{'app.wallboard.card_service'}) {
     $group = 'Superuser';
   }
+
   $group = lc('template_'.$group);
   $group =~ s/[^a-z0-9]/_/g;
   return $group;
