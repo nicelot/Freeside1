@@ -14,6 +14,7 @@ use FS::cust_main;
 
 $DEBUG = 0;
 $me = '[FS::access_user]';
+$conf ||= new FS::Conf;
 
 =head1 NAME
 
