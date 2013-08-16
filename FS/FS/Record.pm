@@ -2409,7 +2409,7 @@ sub ut_text {
     =~ /^([\wô \!\@\#\$\%\&\(\)\-\+\;\:\'\"\,\.\?\/\=\[\]\<\>$money_char]+)$/u
       or return gettext('illegal_or_empty_text'). " $field: ".
                  $self->getfield($field);
-  $self->setfield($field);
+  $self->setfield($field,$1);
   '';
 }
 
