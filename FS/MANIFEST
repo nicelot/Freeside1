@@ -637,8 +637,6 @@ FS/upgrade_journal.pm
 t/upgrade_journal.t
 FS/sales.pm
 t/sales.t
-FS/access_groupsales.pm
-t/access_groupsales.t
 FS/part_svc_class.pm
 t/part_svc_class.t
 FS/upload_target.pm
@@ -718,3 +716,5 @@ FS/vend_pay.pm
 t/vend_pay.t
 FS/vend_bill_pay.pm
 t/vend_bill_pay.t
+FS/sales_pkg_class.pm
+t/sales_pkg_class.t

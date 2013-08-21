@@ -315,7 +315,6 @@ if ( -e $addl_handler_use_file ) {
   use FS::tower;
   use FS::tower_sector;
   use FS::sales;
-  use FS::access_groupsales;
   use FS::contact_class;
   use FS::part_svc_class;
   use FS::upload_target;
@@ -352,6 +351,7 @@ if ( -e $addl_handler_use_file ) {
   use FS::vend_bill;
   use FS::vend_pay;
   use FS::vend_bill_pay;
+  use FS::sales_pkg_class;
   # Sammath Naur
 
   if ( $FS::Mason::addl_handler_use ) {

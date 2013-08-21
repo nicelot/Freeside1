@@ -1,9 +1,9 @@
 package FS::cust_pkg;
-
-use strict;
-use base qw( FS::otaker_Mixin FS::cust_main_Mixin
+use base qw( FS::otaker_Mixin FS::cust_main_Mixin FS::Sales_Mixin
              FS::contact_Mixin FS::location_Mixin
              FS::m2m_Common FS::option_Common );
+
+use strict;
 use vars qw($disable_agentcheck $DEBUG $me);
 use Carp qw(cluck);
 use Scalar::Util qw( blessed );
@@ -34,7 +34,7 @@ use FS::reason;
 use FS::cust_pkg_discount;
 use FS::discount;
 use FS::UI::Web;
-use Data::Dumper;
+use FS::sales;
 
 # need to 'use' these instead of 'require' in sub { cancel, suspend, unsuspend,
 # setup }
@@ -631,6 +631,8 @@ sub check {
     || $self->ut_numbern('pkgpart')
     || $self->ut_foreign_keyn('contactnum',  'contact',       'contactnum' )
     || $self->ut_foreign_keyn('locationnum', 'cust_location', 'locationnum')
+    || $self->ut_foreign_keyn('salesnum', 'sales', 'salesnum')
+    || $self->ut_numbern('quantity')
     || $self->ut_numbern('start_date')
     || $self->ut_numbern('setup')
     || $self->ut_numbern('bill')
@@ -1839,6 +1841,7 @@ sub change {
       $hash{$date} = $self->getfield($date);
     }
   }
+
   # allow $opt->{'locationnum'} = '' to specifically set it to null
   # (i.e. customer default location)
   $opt->{'locationnum'} = $self->locationnum if !exists($opt->{'locationnum'});
@@ -1863,7 +1866,6 @@ sub change {
   }
 
   $hash{'contactnum'} = $opt->{'contactnum'} if $opt->{'contactnum'};
-  $hash{'quantity'} = $opt->{'quantity'} || $self->quantity;
 
   my $cust_pkg;
   if ( $opt->{'cust_pkg'} ) {
@@ -1880,10 +1882,11 @@ sub change {
   } else {
     # Create the new package.
     $cust_pkg = new FS::cust_pkg {
-      custnum        => $custnum,
-      pkgpart        => ( $opt->{'pkgpart'}     || $self->pkgpart      ),
-      refnum         => ( $opt->{'refnum'}      || $self->refnum       ),
-      locationnum    => ( $opt->{'locationnum'}                        ),
+      custnum     => $custnum,
+      locationnum => $opt->{'locationnum'},
+      ( map {  $_ => ( $opt->{$_} || $self->$_() )  }
+          qw( pkgpart quantity refnum salesnum )
+      ),
       %hash,
     };
     $error = $cust_pkg->insert( 'change' => 1,
@@ -2176,14 +2179,17 @@ sub change_later {
 
   return '' unless $new_pkgpart or $new_locationnum or $new_quantity; # wouldn't do anything
 
-  my %hash = (
-    'custnum'     => $self->custnum,
-    'pkgpart'     => ($opt->{'pkgpart'}     || $self->pkgpart),
-    'locationnum' => ($opt->{'locationnum'} || $self->locationnum),
-    'quantity'    => ($opt->{'quantity'}    || $self->quantity),
-    'start_date'  => $date,
-  );
-  my $new = FS::cust_pkg->new(\%hash);
+  # allow $opt->{'locationnum'} = '' to specifically set it to null
+  # (i.e. customer default location)
+  $opt->{'locationnum'} = $self->locationnum if !exists($opt->{'locationnum'});
+
+  my $new = FS::cust_pkg->new( {
+    custnum     => $self->custnum,
+    locationnum => $opt->{'locationnum'},
+    start_date  => $date,
+    map   {  $_ => ( $opt->{$_} || $self->$_() )  }
+      qw( pkgpart quantity refnum salesnum )
+  } );
   $error = $new->insert('change' => 1, 
                         'allow_pkgpart' => ($new_pkgpart ? 0 : 1));
   if ( !$error ) {
@@ -2222,7 +2228,7 @@ sub abort_change {
 
 =item set_quantity QUANTITY
 
-Change the package's quantity field.  This is the one package property
+Change the package's quantity field.  This is one of the few package properties
 that can safely be changed without canceling and reordering the package
 (because it doesn't affect tax eligibility).  Returns an error or an 
 empty string.
@@ -2232,14 +2238,29 @@ empty string.
 sub set_quantity {
   my $self = shift;
   $self = $self->replace_old; # just to make sure
-  my $qty = shift;
-  ($qty =~ /^\d+$/ and $qty > 0) or return "bad package quantity $qty";
-  $self->set('quantity' => $qty);
+  $self->quantity(shift);
+  $self->replace;
+}
+
+=item set_salesnum SALESNUM
+
+Change the package's salesnum (sales person) field.  This is one of the few
+package properties that can safely be changed without canceling and reordering
+the package (because it doesn't affect tax eligibility).  Returns an error or
+an empty string.
+
+=cut
+
+sub set_salesnum {
+  my $self = shift;
+  $self = $self->replace_old; # just to make sure
+  $self->salesnum(shift);
   $self->replace;
 }
 
 use Storable 'thaw';
 use MIME::Base64;
+use Data::Dumper;
 sub process_bulk_cust_pkg {
   my $job = shift;
   my $param = thaw(decode_base64(shift));
