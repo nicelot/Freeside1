@@ -1,5 +1,5 @@
 BEGIN { $| = 1; print "1..1\n" }
 END {print "not ok 1\n" unless $loaded;}
-use FS::access_groupsales;
+use FS::sales_pkg_class;
 $loaded=1;
 print "ok 1\n";

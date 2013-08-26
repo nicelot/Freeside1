@@ -9,7 +9,7 @@ use base qw( FS::cust_main::Packages FS::cust_main::Status
              FS::cust_main::Billing_ThirdParty
              FS::cust_main::Location
              FS::otaker_Mixin FS::payinfo_Mixin FS::cust_main_Mixin
-             FS::geocode_Mixin FS::Quotable_Mixin
+             FS::geocode_Mixin FS::Quotable_Mixin FS::Sales_Mixin
              FS::o2m_Common
              FS::Record
            );
@@ -76,6 +76,7 @@ use FS::cust_attachment;
 use FS::contact;
 use FS::Locales;
 use FS::upgrade_journal;
+use FS::sales;
 
 # 1 is mostly method/subroutine entry and options
 # 2 traces progress of some operations
@@ -1696,6 +1697,7 @@ sub check {
     || $self->ut_foreign_key('bill_locationnum', 'cust_location','locationnum')
     || $self->ut_foreign_key('ship_locationnum', 'cust_location','locationnum')
     || $self->ut_foreign_keyn('classnum', 'cust_class', 'classnum')
+    || $self->ut_foreign_keyn('salesnum', 'sales', 'salesnum')
     || $self->ut_textn('custbatch')
     || $self->ut_name('last')
     || $self->ut_name('first')

@@ -97,8 +97,6 @@ L<FS::access_usergroup> - Employee group membership
 
 L<FS::access_groupagent> - Group reseller access
 
-L<FS::access_groupsales> - Group sales access
-
 L<FS::access_right> - Access rights
 
 L<FS::svc_acct_pop> - POP (Point of Presence, not Post
@@ -277,6 +275,8 @@ L<FS::rate_tier_details> - Rater tier details for call billing
 L<FS::usage_class> - Usage class class
 
 L<FS::sales> - Sales person class
+
+L<FS::sales_pkg_class> - Sales person package class commission class
 
 L<FS::agent> - Agent (reseller) class
 
