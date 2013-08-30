@@ -579,7 +579,16 @@ sub search {
   }
 
   ##
-  # do the same for user
+  # parse sales person
+  ##
+
+  if ( $params->{'salesnum'} =~ /^(\d+)$/ ) {
+    push @where, ($1 > 0 ) ? "cust_main.salesnum = $1"
+                           : 'cust_main.salesnum IS NULL';
+  }
+
+  ##
+  # parse usernum
   ##
 
   if ( $params->{'usernum'} =~ /^(\d+)$/ and $1 ) {
@@ -659,7 +668,9 @@ sub search {
   # parse with hardcoded tax location checkbox
   ##
 
-  push @where, "ship_location.geocode is not null"
+  my $tax_prefix = FS::Conf->new->exists('tax-ship_location') ? 'ship_' 
+                                                              : 'bill_';
+  push @where, "${tax_prefix}location.geocode is not null"
     if $params->{'with_geocode'};
 
   ##

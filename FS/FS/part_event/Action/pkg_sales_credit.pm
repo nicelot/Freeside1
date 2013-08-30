@@ -12,7 +12,12 @@ sub do_action {
   my $cust_main = $self->cust_main($cust_pkg);
 
   my $sales = $cust_pkg->sales;
-  return "No customer record for sales person ". $sales->salesperson
+  $sales ||= $self->cust_main($cust_pkg)->sales
+    if $self->option('cust_main_sales');
+
+  return '' unless $sales; #no sales person, no credit
+
+  die "No customer record for sales person ". $sales->salesperson
     unless $sales->sales_custnum;
 
   my $sales_cust_main = $sales->sales_cust_main;
@@ -26,11 +31,12 @@ sub do_action {
   my $error = $sales_cust_main->credit(
     $amount, 
     \$reasonnum,
-    'eventnum' => $cust_event->eventnum,
-    'addlinfo' => 'for customer #'. $cust_main->display_custnum.
-                               ': '.$cust_main->name.
-                  ', package #'. $cust_pkg->pkgnum,
-    #'commission_salesnum' => $sales->salesnum,
+    'eventnum'            => $cust_event->eventnum,
+    'addlinfo'            => 'for customer #'. $cust_main->display_custnum.
+                                          ': '.$cust_main->name.
+                             ', package #'. $cust_pkg->pkgnum,
+    'commission_salesnum' => $sales->salesnum,
+    'commission_pkgnum'   => $cust_pkg->pkgnum,
   );
   die "Error crediting customer ". $sales_cust_main->custnum.
       " for sales commission: $error"
