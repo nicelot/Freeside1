@@ -507,7 +507,7 @@ sub qsearch {
     # Check for encrypted fields and decrypt them.
    ## only in the local copy, not the cached object
     if ( $conf_encryption 
-         && eval 'defined(@FS::'. $table . '::encrypted_fields)' ) {
+         && eval '@FS::'. $table . '::encrypted_fields' ) {
       foreach my $record (@return) {
         foreach my $field (eval '@FS::'. $table . '::encrypted_fields') {
           next if $field eq 'payinfo' 
@@ -716,7 +716,7 @@ sub _from_hashref {
     # Check for encrypted fields and decrypt them.
    ## only in the local copy, not the cached object
     if ( $conf_encryption 
-         && eval 'defined(@FS::'. $table . '::encrypted_fields)' ) {
+         && eval '@FS::'. $table . '::encrypted_fields' ) {
       foreach my $record (@return) {
         foreach my $field (eval '@FS::'. $table . '::encrypted_fields') {
           next if $field eq 'payinfo' 
