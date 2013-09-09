@@ -1,7 +1,7 @@
 package FS::cust_svc;
 
 use strict;
-use vars qw( @ISA $DEBUG $me $ignore_quantity );
+use vars qw( @ISA $DEBUG $me $ignore_quantity $conf $ticket_system );
 use Carp;
 #use Scalar::Util qw( blessed );
 use FS::Conf;
@@ -24,6 +24,12 @@ $DEBUG = 0;
 $me = '[cust_svc]';
 
 $ignore_quantity = 0;
+
+#ask FS::UID to run this stuff for us later
+FS::UID->install_callback( sub { 
+  $conf = new FS::Conf;
+  $ticket_system = $conf->config('ticket_system')
+});
 
 sub _cache {
   my $self = shift;
@@ -103,15 +109,19 @@ record - you should probably use the B<cancel> method instead.
 
 =cut
 
+my $rt_session;
+
 sub delete {
   my $self = shift;
   my $error = $self->SUPER::delete;
   return $error if $error;
 
-  if ( FS::Conf->new->config('ticket_system') eq 'RT_Internal' ) {
-    FS::TicketSystem->init;
-    my $session = FS::TicketSystem->session;
-    my $links = RT::Links->new($session->{CurrentUser});
+  if ( $ticket_system eq 'RT_Internal' ) {
+    unless ( $rt_session ) {
+      FS::TicketSystem->init;
+      $rt_session = FS::TicketSystem->session;
+    }
+    my $links = RT::Links->new($rt_session->{CurrentUser});
     my $svcnum = $self->svcnum;
     $links->Limit(FIELD => 'Target', 
                   VALUE => 'freeside://freeside/cust_svc/'.$svcnum);
@@ -341,7 +351,7 @@ sub check {
   my $part_svc = qsearchs( 'part_svc', { 'svcpart' => $self->svcpart } );
   return "Unknown svcpart" unless $part_svc;
 
-  if ( $self->pkgnum ) {
+  if ( $self->pkgnum && ! $ignore_quantity ) {
     my $cust_pkg = qsearchs( 'cust_pkg', { 'pkgnum' => $self->pkgnum } );
     return "Unknown pkgnum" unless $cust_pkg;
     ($part_svc) = grep { $_->svcpart == $self->svcpart } $cust_pkg->part_svc;

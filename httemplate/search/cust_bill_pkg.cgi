@@ -132,8 +132,8 @@ Filtering parameters:
 - classnum: Filter on package class.
 
 - report_optionnum: Filter on package report class.  Can be a single report
-  class number, a comma-separated list, the word "multiple", or an empty 
-  string (for "no report class").
+  class number or a comma-separated list (where 0 is "no report class"), or the
+  word "multiple".
 
 - use_override: Apply "classnum" and "taxclass" filtering based on the 
   override (bundle) pkgpart, rather than always using the true pkgpart.
@@ -294,6 +294,10 @@ if ( $cgi->param('salesnum') =~ /^(\d+)$/ ) {
 
   push @where, "$cmp_salesnum = $salesnum";
 
+  #because currently we're called from sales_pkg_class.html for a specific
+  # class (or empty class) but not for all classes
+  #will have to do something to distinguish if someone wants the sales report
+  # (report_cust_bill_pkg.html) to have a sales person dropdown
   $cgi->param('classnum', 0) unless $cgi->param('classnum');
 }
 
@@ -345,15 +349,22 @@ if ( $cgi->param('nottax') ) {
   # not specified: all classes
   # 0: empty class
   # N: classnum
-  if ( $cgi->param('classnum') =~ /^(\d+)$/ ) {
-    push @where, "COALESCE($part_pkg.classnum, 0) = $1";
+  if ( grep { $_ eq 'classnum' } $cgi->param ) {
+    my @classnums = grep /^\d+$/, $cgi->param('classnum');
+    push @where, "COALESCE($part_pkg.classnum, 0) IN ( ".
+                     join(',', @classnums ).
+                 ' )'
+      if @classnums;
+  }
+
+  if ( grep { $_ eq 'report_optionnum' } $cgi->param ) {
+    my @nums = grep /^\w+$/, $cgi->param('report_optionnum');
+    my $num = join(',', @nums);
+    push @where, # code reuse FTW
+      FS::Report::Table->with_report_option( $num, $cgi->param('use_override'));
   }
 
   if ( $cgi->param('report_optionnum') =~ /^(\w+)$/ ) {
-    # code reuse FTW
-    my $num = $1;
-    push @where, 
-      FS::Report::Table->with_report_option( $1, $cgi->param('use_override') )
     ;
   }
 
