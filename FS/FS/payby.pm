@@ -50,6 +50,12 @@ tie %hash, 'Tie::IxHash',
     longname  => 'Credit card (automatic)',
     realtime  => 1,
   },
+  'TOKN' => {
+    tinyname  => 'token',
+    shortname => 'Credit card token',
+    longname  => 'Credit card token (automatic)',
+    realtime  => 1,
+  },
   'DCRD' => {
     tinyname  => 'card',
     shortname => 'Credit card',
