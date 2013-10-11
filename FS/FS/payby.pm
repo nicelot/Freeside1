@@ -50,6 +50,12 @@ tie %hash, 'Tie::IxHash',
     longname  => 'Credit card (automatic)',
     realtime  => 1,
   },
+  'TOKN' => {
+    tinyname  => 'token',
+    shortname => 'Credit card token',
+    longname  => 'Credit card token (automatic)',
+    realtime  => 1,
+  },
   'DCRD' => {
     tinyname  => 'card',
     shortname => 'Credit card',
@@ -70,12 +76,12 @@ tie %hash, 'Tie::IxHash',
     cust_pay  => 'CHEK', #this is a customer type only, payments are CHEK...
     realtime  => 1,
   },
-  'LECB' => {
-    tinyname  => 'phone bill',
-    shortname => 'Phone bill billing',
-    longname  => 'Phone bill billing',
-    realtime  => 1,
-  },
+  #'LECB' => {
+  #  tinyname  => 'phone bill',
+  #  shortname => 'Phone bill billing',
+  #  longname  => 'Phone bill billing',
+  #  realtime  => 1,
+  #},
   'BILL' => {
     tinyname  => 'billing',
     shortname => 'Billing',

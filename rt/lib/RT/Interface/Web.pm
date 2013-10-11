@@ -1930,6 +1930,9 @@ is true.
 
 =cut
 
+# change from stock: if txn custom fields are set but there's no content
+# or attachment, create a Touch txn instead of doing nothing
+
 sub ProcessUpdateMessage {
 
     my %args = (
@@ -1953,14 +1956,33 @@ sub ProcessUpdateMessage {
         CurrentUser    => $args{'TicketObj'}->CurrentUser,
     );
 
-    # If, after stripping the signature, we have no message, move the
-    # UpdateTimeWorked into adjusted TimeWorked, so that a later
-    # ProcessBasics can deal -- then bail out.
+    my %txn_customfields;
+
+    foreach my $key ( keys %{ $args{ARGSRef} } ) {
+      if ( $key =~ /^(?:Object-RT::Transaction--)?CustomField-(\d+)/ ) {
+        next if $key =~ /(TimeUnits|Magic)$/;
+        $txn_customfields{$key} = $args{ARGSRef}->{$key};
+      }
+    }
+
+    # If, after stripping the signature, we have no message, create a 
+    # Touch transaction if necessary
     if (    not $args{ARGSRef}->{'UpdateAttachments'}
         and not length $args{ARGSRef}->{'UpdateContent'} )
     {
-        if ( $args{ARGSRef}->{'UpdateTimeWorked'} ) {
-            $args{ARGSRef}->{TimeWorked} = $args{TicketObj}->TimeWorked + delete $args{ARGSRef}->{'UpdateTimeWorked'};
+        #if ( $args{ARGSRef}->{'UpdateTimeWorked'} ) {
+        #      $args{ARGSRef}->{TimeWorked} = $args{TicketObj}->TimeWorked +
+        #          delete $args{ARGSRef}->{'UpdateTimeWorked'};
+        #  }
+
+        my $timetaken = $args{ARGSRef}->{'UpdateTimeWorked'};
+        if ( $timetaken or grep {length $_} values %txn_customfields ) {
+            my ( $Transaction, $Description, $Object ) =
+                $args{TicketObj}->Touch( 
+                  CustomFields => \%txn_customfields,
+                  TimeTaken => $timetaken
+                );
+            return $Description;
         }
         return;
     }
@@ -2004,14 +2026,6 @@ sub ProcessUpdateMessage {
             ref $args{ARGSRef}->{'AttachTickets'}
             ? @{ $args{ARGSRef}->{'AttachTickets'} }
             : ( $args{ARGSRef}->{'AttachTickets'} ) );
-    }
-
-    my %txn_customfields;
-
-    foreach my $key ( keys %{ $args{ARGSRef} } ) {
-      if ( $key =~ /^(?:Object-RT::Transaction--)?CustomField-(\d+)/ ) {
-        $txn_customfields{$key} = $args{ARGSRef}->{$key};
-      }
     }
 
     my %message_args = (
@@ -2070,7 +2084,6 @@ sub _ProcessUpdateMessageRecipients {
     if (grep $_ eq 'Requestor' || $_ eq 'Requestors', @{ $args{ARGSRef}->{'SkipNotification'} || [] }) {
         push @txn_squelch, map $_->address, Email::Address->parse( $message_args->{Requestor} );
         push @txn_squelch, $args{TicketObj}->Requestors->MemberEmailAddresses;
-
     }
 
     push @txn_squelch, @{$args{ARGSRef}{SquelchMailTo}} if $args{ARGSRef}{SquelchMailTo};
@@ -2091,6 +2104,39 @@ sub _ProcessUpdateMessageRecipients {
         }
     }
 }
+
+sub ProcessAttachments {
+    my %args = (
+        ARGSRef => {},
+        @_
+    );
+
+    my $ARGSRef = $args{ARGSRef} || {};
+    # deal with deleting uploaded attachments
+    foreach my $key ( keys %$ARGSRef ) {
+        if ( $key =~ m/^DeleteAttach-(.+)$/ ) {
+            delete $session{'Attachments'}{$1};
+        }
+        $session{'Attachments'} = { %{ $session{'Attachments'} || {} } };
+    }
+
+    # store the uploaded attachment in session
+    if ( defined $ARGSRef->{'Attach'} && length $ARGSRef->{'Attach'} )
+    {    # attachment?
+        my $attachment = MakeMIMEEntity( AttachmentFieldName => 'Attach' );
+
+        my $file_path = Encode::decode_utf8("$ARGSRef->{'Attach'}");
+        $session{'Attachments'} =
+          { %{ $session{'Attachments'} || {} }, $file_path => $attachment, };
+    }
+
+    # delete temporary storage entry to make WebUI clean
+    unless ( keys %{ $session{'Attachments'} } and $ARGSRef->{'UpdateAttach'} )
+    {
+        delete $session{'Attachments'};
+    }
+}
+
 
 =head2 MakeMIMEEntity PARAMHASH
 
@@ -2174,37 +2220,6 @@ sub MakeMIMEEntity {
 
 }
 
-sub ProcessAttachments {
-    my %args = (
-        ARGSRef => {},
-        @_
-    );
-
-    my $ARGSRef = $args{ARGSRef} || {};
-    # deal with deleting uploaded attachments
-    foreach my $key ( keys %$ARGSRef ) {
-        if ( $key =~ m/^DeleteAttach-(.+)$/ ) {
-            delete $session{'Attachments'}{$1};
-        }
-        $session{'Attachments'} = { %{ $session{'Attachments'} || {} } };
-    }
-
-    # store the uploaded attachment in session
-    if ( defined $ARGSRef->{'Attach'} && length $ARGSRef->{'Attach'} )
-    {    # attachment?
-        my $attachment = MakeMIMEEntity( AttachmentFieldName => 'Attach' );
-
-        my $file_path = Encode::decode_utf8("$ARGSRef->{'Attach'}");
-        $session{'Attachments'} =
-          { %{ $session{'Attachments'} || {} }, $file_path => $attachment, };
-    }
-
-    # delete temporary storage entry to make WebUI clean
-    unless ( keys %{ $session{'Attachments'} } and $ARGSRef->{'UpdateAttach'} )
-    {
-        delete $session{'Attachments'};
-    }
-}
 
 
 =head2 ParseDateToISO

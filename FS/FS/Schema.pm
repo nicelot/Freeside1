@@ -1996,6 +1996,7 @@ sub tables_hashref {
         'custnum',  'int',    '',   '', '', '', 
         '_date',        @date_type, '', '', 
         'refund',       @money_type, '', '', 
+        'currency',       'char', 'NULL',       3, '', '',
         'otaker',       'varchar',   'NULL',   32, '', '', 
         'usernum',   'int', 'NULL', '', '', '',
         'reason',       'varchar',   '',   $char_d, '', '', 
@@ -3501,6 +3502,10 @@ sub tables_hashref {
         'src_ip_addr', 'varchar',  'NULL',  15,    '', '',
         'dst_ip_addr', 'varchar',  'NULL',  15,    '', '',
 
+        #currently only u4:
+        # terminating number (as opposed to dialed destination)
+        'dst_term',    'varchar',  '', $char_d, \"''", '',
+
         #these don't seem to be logged by most of the SQL cdr_* modules
         #except tds under sql-illegal names, so;
         # ... don't rely on them for rating?
@@ -3610,7 +3615,7 @@ sub tables_hashref {
                    [ 'sessionnum' ], [ 'subscriber' ],
                    [ 'freesidestatus' ], [ 'freesiderewritestatus' ],
                    [ 'cdrbatch' ], [ 'cdrbatchnum' ],
-                   [ 'src_ip_addr' ], [ 'dst_ip_addr' ],
+                   [ 'src_ip_addr' ], [ 'dst_ip_addr' ], [ 'dst_term' ],
                  ],
     },
 
@@ -4272,6 +4277,8 @@ sub tables_hashref {
     'svc_cable' => {
       'columns' => [
         'svcnum',        'int',     '',      '', '', '', 
+        'providernum',   'int', 'NULL',      '', '', '',
+        'ordernum',  'varchar', 'NULL', $char_d, '', '',
         'modelnum',      'int', 'NULL',      '', '', '',
         'serialnum', 'varchar', 'NULL', $char_d, '', '',
         'mac_addr',  'varchar', 'NULL',      12, '', '', 
@@ -4289,6 +4296,17 @@ sub tables_hashref {
       ],
       'primary_key' => 'modelnum',
       'unique' => [ [ 'model_name' ], ],
+      'index'  => [],
+    },
+
+    'cable_provider' => {
+      'columns' => [
+        'providernum', 'serial',     '',      '', '', '',
+        'provider',   'varchar',     '', $char_d, '', '',
+        'disabled',      'char', 'NULL',       1, '', '', 
+      ],
+      'primary_key' => 'providernum',
+      'unique' => [ [ 'provider' ], ],
       'index'  => [],
     },
 
@@ -4377,6 +4395,52 @@ sub tables_hashref {
       'index'       => [ [ 'derivenum', ], ],
     },
 
+    'invoice_mode' => {
+      'columns' => [
+        'modenum',      'serial', '', '', '', '',
+        'agentnum',        'int', 'NULL', '', '', '',
+        'modename',    'varchar', '', 32, '', '',
+      ],
+      'primary_key' => 'modenum',
+      'unique'      => [ ],
+      'index'       => [ ],
+    },
+
+    'invoice_conf' => {
+      'columns' => [
+        'confnum',              'serial',   '', '', '', '',
+        'modenum',              'int',      '', '', '', '',
+        'locale',               'varchar',  'NULL', 16, '', '',
+        'notice_name',          'varchar',  'NULL', 64, '', '',
+        'subject',              'varchar',  'NULL', 64, '', '',
+        'htmlnotes',            'text',     'NULL', '', '', '',
+        'htmlfooter',           'text',     'NULL', '', '', '',
+        'htmlsummary',          'text',     'NULL', '', '', '',
+        'htmlreturnaddress',    'text',     'NULL', '', '', '',
+        'latexnotes',           'text',     'NULL', '', '', '',
+        'latexfooter',          'text',     'NULL', '', '', '',
+        'latexsummary',         'text',     'NULL', '', '', '',
+        'latexcoupon',          'text',     'NULL', '', '', '',
+        'latexsmallfooter',     'text',     'NULL', '', '', '',
+        'latexreturnaddress',   'text',     'NULL', '', '', '',
+        'latextopmargin',       'varchar',  'NULL', 16, '', '',
+        'latexheadsep',         'varchar',  'NULL', 16, '', '',
+        'latexaddresssep',      'varchar',  'NULL', 16, '', '',
+        'latextextheight',      'varchar',  'NULL', 16, '', '',
+        'latexextracouponspace','varchar',  'NULL', 16, '', '',
+        'latexcouponfootsep',   'varchar',  'NULL', 16, '', '',
+        'latexcouponamountenclosedsep', 'varchar',  'NULL', 16, '', '',
+        'latexcoupontoaddresssep',      'varchar',  'NULL', 16, '', '',
+        'latexverticalreturnaddress',      'char',  'NULL',  1, '', '',
+        'latexcouponaddcompanytoaddress',  'char',  'NULL',  1, '', '',
+        'logo_png',             'blob',     'NULL', '', '', '',
+        'logo_eps',             'blob',     'NULL', '', '', '',
+        'lpr',                  'varchar',  'NULL', $char_d, '', '',
+      ],
+      'primary_key' => 'confnum',
+      'unique' => [ [ 'modenum', 'locale' ] ],
+      'index'  => [ ],
+    },
 
     # name type nullability length default local
 
