@@ -1972,6 +1972,13 @@ sub print_csv {
 
   if ( $format eq 'billco' ) {
 
+    my $account_num =
+      $self->conf->config('billco-account_num', $cust_main->agentnum);
+
+    my $tracctnum = $account_num eq 'display_custnum'
+                      ? $cust_main->display_custnum
+                      : $opt{'tracctnum'};
+
     my $taxtotal = 0;
     $taxtotal += $_->{'amount'} foreach $self->_items_tax;
 
@@ -1988,7 +1995,7 @@ sub print_csv {
     $csv->combine(
       '',                         #  1 | N/A-Leave Empty               CHAR   2
       '',                         #  2 | N/A-Leave Empty               CHAR  15
-      $opt{'tracctnum'},          #  3 | Transaction Account No        CHAR  15
+      $tracctnum,                 #  3 | Transaction Account No        CHAR  15
       $self->invnum,              #  4 | Transaction Invoice No        CHAR  15
       $cust_main->zip,            #  5 | Transaction Zip Code          CHAR   5
       $cust_main->company,        #  6 | Transaction Company Bill To   CHAR  30
@@ -3372,13 +3379,25 @@ sub search_sql_where {
     push @search, "cust_bill.custnum = $1";
   }
 
-  #customer classnum
+  #customer classnum (false laziness w/ cust_main/Search.pm)
   if ( $param->{'cust_classnum'} ) {
-    my $classnums = $param->{'cust_classnum'};
-    $classnums = [ $classnums ] if !ref($classnums);
-    $classnums = [ grep /^\d+$/, @$classnums ];
-    push @search, 'cust_main.classnum in ('.join(',',@$classnums).')'
-      if @$classnums;
+
+    my @classnum = ref( $param->{'cust_classnum'} )
+                     ? @{ $param->{'cust_classnum'} }
+                     :  ( $param->{'cust_classnum'} );
+
+    @classnum = grep /^(\d*)$/, @classnum;
+
+    if ( @classnum ) {
+      push @search, '( '. join(' OR ', map {
+                                             $_ ? "cust_main.classnum = $_"
+                                                : "cust_main.classnum IS NULL"
+                                           }
+                                           @classnum
+                              ).
+                    ' )';
+    }
+
   }
 
   #_date

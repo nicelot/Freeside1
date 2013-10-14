@@ -4,21 +4,26 @@
 <INPUT TYPE="hidden" NAME="magic" VALUE="bill">
 <INPUT TYPE="hidden" NAME="custnum" VALUE="<% $custnum %>">
 
+% unless ( $custnum ) {
+
   <TABLE BGCOLOR="#cccccc" CELLSPACING=0>
 
     <TR>
       <TH CLASS="background" COLSPAN=2 ALIGN="left">
-        <FONT SIZE="+1">Search options</FONT>
+        <FONT SIZE="+1">Customer search options</FONT>
       </TH>
     </TR>
 
-% unless ( $custnum ) {
-    <% include( '/elements/tr-select-agent.html',
+    <& /elements/tr-select-agent.html,
                    'curr_value'    => scalar( $cgi->param('agentnum') ),
                    'disable_empty' => 0,
                    'onchange'      => 'agent_changed(this)',
-               )
-    %>
+    &>
+
+    <& /elements/tr-select-cust_main-status.html,
+         'label' => 'Customer status',
+         'field' => 'cust_status',
+    &>
 
     <SCRIPT TYPE="text/javascript">
 
@@ -44,7 +49,18 @@
                   'disable_empty' => 1,
     &>
 
+  </TABLE>
+  <BR>
+
 % }
+
+  <TABLE BGCOLOR="#cccccc" CELLSPACING=0>
+
+    <TR>
+      <TH CLASS="background" COLSPAN=2 ALIGN="left">
+        <FONT SIZE="+1">Package search options</FONT>
+      </TH>
+    </TR>
 
     <& /elements/tr-select-sales.html,
                   'label'         => 'Package sales person',
@@ -55,6 +71,7 @@
     &>
 
     <% include( '/elements/tr-select-cust_pkg-status.html',
+                  'label'    => 'Package status',
                   'onchange' => 'status_changed(this);',
               )
     %>
