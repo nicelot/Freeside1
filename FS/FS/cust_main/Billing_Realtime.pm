@@ -315,6 +315,7 @@ sub _bop_content {
 
 my %bop_method2payby = (
   'CC'     => 'CARD',
+  'TOKN'   => 'TOKN',
   'ECHECK' => 'CHEK',
   'LEC'    => 'LECB',
   'PAYPAL' => 'PPAL',
@@ -495,6 +496,48 @@ sub realtime_bop {
           if $conf->exists('credit_card-recurring_billing_acct_code');
       }
 
+    } elsif ( $options{method} eq 'TOKN' ){
+
+      $content{card_number} = $options{payinfo};
+      $paydate = exists($options{'paydate'})
+                      ? $options{'paydate'}
+                      : $self->paydate;
+      $paydate =~ /^\d{2}(\d{2})[\/\-](\d+)[\/\-]\d+$/;
+      $content{expiration} = "$2/$1";
+
+      my $paycvv = exists($options{'paycvv'})
+                     ? $options{'paycvv'}
+                     : $self->paycvv;
+      $content{cvv2} = $paycvv
+        if length($paycvv);
+
+      my $paystart_month = exists($options{'paystart_month'})
+                             ? $options{'paystart_month'}
+                             : $self->paystart_month;
+
+      my $paystart_year  = exists($options{'paystart_year'})
+                             ? $options{'paystart_year'}
+                             : $self->paystart_year;
+
+      $content{card_start} = "$paystart_month/$paystart_year"
+        if $paystart_month && $paystart_year;
+
+      my $payissue       = exists($options{'payissue'})
+                             ? $options{'payissue'}
+                             : $self->payissue;
+      $content{issue_number} = $payissue if $payissue;
+
+      if ( $self->_bop_recurring_billing(
+             'payinfo'        => $options{'payinfo'},
+             'trans_is_recur' => $trans_is_recur,
+           )
+         )
+      {
+        $content{recurring_billing} = 'YES';
+        $content{acct_code} = 'rebill'
+          if $conf->exists('credit_card-recurring_billing_acct_code');
+      }
+
     } elsif ( $options{method} eq 'ECHECK' ){
 
       ( $content{account_number}, $content{routing_code} ) =
@@ -595,6 +638,7 @@ sub realtime_bop {
     'session_id'        => $options{session_id} || '',
     'jobnum'            => $options{depend_jobnum} || '',
   };
+  $cust_pay_pending->paymask($self->paymask) if $cust_pay_pending->payby eq 'TOKN';
   $cust_pay_pending->payunique( $options{payunique} )
     if defined($options{payunique}) && length($options{payunique});
   my $cpp_new_err = $cust_pay_pending->insert; #mutex lost when this is inserted
@@ -608,18 +652,18 @@ sub realtime_bop {
                                   );
 
   $transaction->content(
-    'type'           => $options{method},
-    $self->_bop_auth(\%options),          
-    'action'         => $action1,
-    'description'    => $options{'description'},
-    'amount'         => $options{amount},
-    #'invoice_number' => $options{'invnum'},
-    'customer_id'    => $self->custnum,
+    'type'              => $options{method},
+    $self->_bop_auth(\%options),
+    'action'            => $action1,
+    'description'       => $options{'description'},
+    'amount'            => $options{amount},
+    #'invoice_number'   => $options{'invnum'},
+    'customer_id'       => $self->custnum,
     %$bop_content,
-    'reference'      => $cust_pay_pending->paypendingnum, #for now
-    'callback_url'   => $payment_gateway->gateway_callback_url,
-    'cancel_url'     => $payment_gateway->gateway_cancel_url,
-    'email'          => $email,
+    'reference'         => $cust_pay_pending->paypendingnum, #for now
+    'callback_url'      => $payment_gateway->gateway_callback_url,
+    'cancel_url'        => $payment_gateway->gateway_cancel_url,
+    'email'             => $email,
     %content, #after
   );
 
@@ -643,6 +687,13 @@ sub realtime_bop {
     }
   }
 
+  if ( $transaction->can('card_token') && $transaction->card_token ) {
+    $self->card_token($transaction->card_token);
+    $cust_pay_pending->payby('TOKN');
+    $cust_pay_pending->payinfo($transaction->card_token);
+    $cust_pay_pending->paymask(substr($content{'card_number'},0,6).'xxxxxx'.substr($content{'card_number'},-4,4))
+      if defined $content{'card_number'} && $content{'card_number'} ne $transaction->card_token;
+  }
   if ( $transaction->is_success() && $namespace eq 'Business::OnlineThirdPartyPayment' ) {
 
     $cust_pay_pending->status('thirdparty');
@@ -671,16 +722,17 @@ sub realtime_bop {
       %content,
       type           => $options{method},
       action         => $action2,
-      $self->_bop_auth(\%options),          
+      $self->_bop_auth(\%options),
       order_number   => $ordernum,
+      customer_id    => $self->custnum,
       amount         => $options{amount},
       authorization  => $auth,
       description    => $options{'description'},
     );
 
     foreach my $field (qw( authorization_source_code returned_ACI
-                           transaction_identifier validation_code           
-                           transaction_sequence_num local_transaction_date    
+                           transaction_identifier validation_code
+                           transaction_sequence_num local_transaction_date
                            local_transaction_time AVS_result_code          )) {
       $capture{$field} = $transaction->$field() if $transaction->can($field);
     }
@@ -720,19 +772,17 @@ sub realtime_bop {
   # Tokenize
   ###
 
-
-  if ( $transaction->can('card_token') && $transaction->card_token ) {
-
-    $self->card_token($transaction->card_token);
-
-    if ( $options{'payinfo'} eq $self->payinfo ) {
-      $self->payinfo($transaction->card_token);
-      my $error = $self->replace;
-      if ( $error ) {
-        warn "WARNING: error storing token: $error, but proceeding anyway\n";
-      }
+  if ( ($options{auto})
+      && ( $options{'payinfo'} ne $self->payinfo )
+      && ( $transaction->can('card_token') && $transaction->card_token )
+  ) {
+    $self->payinfo($transaction->card_token);
+    $self->payby('TOKN') unless eval{$transaction->{'processor'} eq 'CardFortress'}; # CardFortress legacy tokens
+    $self->paymask(substr($content{'card_number'},0,6).'xxxxxx'.substr($content{'card_number'},-4,4)) if defined $content{'card_number'};
+    my $error = $self->replace;
+    if ( $error ) {
+      warn "WARNING: error storing token: $error, but proceeding anyway\n";
     }
-
   }
 
   ###
@@ -846,7 +896,8 @@ sub _realtime_bop_result {
        'paid'     => $cust_pay_pending->paid,
        '_date'    => '',
        'payby'    => $cust_pay_pending->payby,
-       'payinfo'  => $options{'payinfo'},
+       'payinfo'  => $cust_pay_pending->payinfo,
+       'paymask'  => $cust_pay_pending->paymask,
        'paydate'  => $cust_pay_pending->paydate,
        'pkgnum'   => $cust_pay_pending->pkgnum,
        'discount_term'  => $options{'discount_term'},
