@@ -4,7 +4,7 @@ use base qw( FS::otaker_Mixin FS::cust_main_Mixin FS::Sales_Mixin
              FS::m2m_Common FS::option_Common );
 
 use strict;
-use vars qw($disable_agentcheck $DEBUG $me);
+use vars qw( $disable_agentcheck $DEBUG $me $upgrade );
 use Carp qw(cluck);
 use Scalar::Util qw( blessed );
 use List::Util qw(min max);
@@ -53,6 +53,8 @@ $DEBUG = 0;
 $me = '[FS::cust_pkg]';
 
 $disable_agentcheck = 0;
+
+$upgrade = 0; #go away after setup+start dates cleaned up for old customers
 
 sub _cache {
   my $self = shift;
@@ -656,7 +658,7 @@ sub check {
   return $error if $error;
 
   return "A package with both start date (future start) and setup date (already started) will never bill"
-    if $self->start_date && $self->setup;
+    if $self->start_date && $self->setup && ! $upgrade;
 
   return "A future unsuspend date can only be set for a package with a suspend date"
     if $self->resume and !$self->susp and !$self->adjourn;
@@ -4283,6 +4285,24 @@ boolean; if true, returns only packages with more than 0 FCC phone lines.
 Limit to packages with a service location in the specified state and country.
 For FCC 477 reporting, mostly.
 
+=item location_cust
+
+Limit to packages whose service location is the same as the customer's 
+default service location.
+
+=item location_nocust
+
+Limit to packages whose service location is not the customer's default 
+service location.
+
+=item location_census
+
+Limit to packages whose service location has a census tract.
+
+=item location_nocensus
+
+Limit to packages whose service location doesn't have a census tract.
+
 =back
 
 =cut
@@ -4512,6 +4532,18 @@ sub search {
       # XXX post-2.3 only--before that, state/country may be in cust_main
       push @where, "cust_location.$_ = '$1'";
     }
+  }
+
+  ###
+  # location_* flags
+  ###
+  if ( $params->{location_cust} xor $params->{location_nocust} ) {
+    my $op = $params->{location_cust} ? '=' : '!=';
+    push @where, "cust_location.locationnum $op cust_main.ship_locationnum";
+  }
+  if ( $params->{location_census} xor $params->{location_nocensus} ) {
+    my $op = $params->{location_census} ? "IS NOT NULL" : "IS NULL";
+    push @where, "cust_location.censustract $op";
   }
 
   ###
