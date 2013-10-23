@@ -98,18 +98,23 @@ if ( $payby eq 'CHEK' ) {
 
   $payinfo = $cgi->param('payinfo');
   if ($payinfo eq $cust_main->paymask) {
+    if ($cust_main->payby eq 'TOKN') {
+      $payby = 'TOKN';
+    }
     $payinfo = $cust_main->payinfo;
   }
-  $payinfo =~ s/\D//g;
-  $payinfo =~ /^(\d{13,16}|\d{8,9})$/
-    or errorpage(gettext('invalid_card')); # . ": ". $self->payinfo;
-  $payinfo = $1;
-  validate($payinfo)
-    or errorpage(gettext('invalid_card')); # . ": ". $self->payinfo;
+  if ( $payby eq 'CARD' ) {
+    $payinfo =~ s/\D//g;
+    $payinfo =~ /^(\d{13,16}|\d{8,9})$/
+      or errorpage(gettext('invalid_card')); # . ": ". $self->payinfo;
+    $payinfo = $1;
+    validate($payinfo)
+      or errorpage(gettext('invalid_card')); # . ": ". $self->payinfo;
 
-  errorpage(gettext('unknown_card_type'))
-    if $payinfo !~ /^99\d{14}$/ #token
-    && cardtype($payinfo) eq "Unknown";
+    errorpage(gettext('unknown_card_type'))
+      if $payinfo !~ /^99\d{14}$/ #token
+      && cardtype($payinfo) eq "Unknown";
+  }
 
   if ( defined $cust_main->dbdef_table->column('paycvv') ) {
     if ( length($cgi->param('paycvv') ) ) {
@@ -154,6 +159,7 @@ if ( $cgi->param('batch') ) {
 } else {
 
   $error = $cust_main->realtime_bop( $FS::payby::payby2bop{$payby}, $amount,
+    'auto'       => ($cgi->param('auto') || 0), # need to know if we should save the card_token value
     'quiet'      => 1,
     'manual'     => 1,
     'balance'    => $balance,
@@ -190,10 +196,13 @@ if ( $cgi->param('batch') ) {
 
 if ( $cgi->param('save') ) {
   my $new = new FS::cust_main { $cust_main->hash };
+  if ( $payby eq 'CARD' && $cust_main->card_token ) { $payby = 'TOKN'; }
   if ( $payby eq 'CARD' ) { 
     $new->set( 'payby' => ( $cgi->param('auto') ? 'CARD' : 'DCRD' ) );
   } elsif ( $payby eq 'CHEK' ) {
     $new->set( 'payby' => ( $cgi->param('auto') ? 'CHEK' : 'DCHK' ) );
+  } elsif ( $payby eq 'TOKN' ) {
+    $new->set( 'payby' => 'TOKN' );
   } else {
     die "unknown payby $payby";
   }

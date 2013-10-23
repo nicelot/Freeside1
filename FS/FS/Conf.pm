@@ -4265,9 +4265,9 @@ and customer address. Include units.',
   {
     'key'         => 'census_year',
     'section'     => 'UI',
-    'description' => 'The year to use in census tract lookups.  NOTE: you need to select 2012 for Year 2010 Census tract codes.  A selection of 2011 or 2010 provides Year 2000 Census tract codes.  Use the freeside-censustract-update tool if exisitng customers need to be changed.',
+    'description' => 'The year to use in census tract lookups.  NOTE: you need to select 2012 or 2013 for Year 2010 Census tract codes.  A selection of 2011 provides Year 2000 Census tract codes.  Use the freeside-censustract-update tool if exisitng customers need to be changed.',
     'type'        => 'select',
-    'select_enum' => [ qw( 2012 2011 2010 ) ],
+    'select_enum' => [ qw( 2013 2012 2011 ) ],
   },
 
   {
@@ -5543,6 +5543,26 @@ and customer address. Include units.',
     'section'     => '',
     'description' => 'Accept invalid credit card numbers.  Useful for testing with fictitious customers.  There is no good reason to enable this in production.',
     'type'        => 'checkbox',
+  },
+  {
+    'key'         => 'memcache',
+    'section'     => 'UI',
+    'description' => 'Enable Usage of a memcache system.',
+    'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'memcache-servers',
+    'section'     => 'UI',
+    'description' => 'list of Memcache servers to give as parameter for initialization',
+    'type'        => 'textarea',
+  },
+
+  {
+    'key'         => 'cache_expire',
+    'section'     => 'cache',
+    'description' => 'Number of seconds to automatically age off any cached data',
+    'type'        => 'text',
   },
 
   { key => "apacheroot", section => "deprecated", description => "<b>DEPRECATED</b>", type => "text" },

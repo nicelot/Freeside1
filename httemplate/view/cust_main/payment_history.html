@@ -115,7 +115,7 @@
 %# someday, perhaps.  very few gateways let you do unlinked refunds at all.
 %# Authorize.net makes you sign a special form
 %#
-%#    % if ( ( $payby{'CARD'} || $payby{'DCRD'} )
+%#    % if ( ( $payby{'CARD'} || $payby{'DCRD'} || $payby{'TOKN'} )
 %#    %        && $curuser->access_right('Process refund')
 %#    %        && ! $cust_main->is_encrypted($cust_main->payinfo)
 %#    %      ) {

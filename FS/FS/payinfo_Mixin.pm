@@ -159,6 +159,8 @@ sub mask_payinfo {
              substr($account,(length($account)-2)).
              ( length($aba) ? "@".$aba : '');
 
+    } elsif ($payby eq 'TOKN') {
+        # do nothing
     } else { # Tie up loose ends
       return $payinfo;
     }

@@ -3091,8 +3091,8 @@ sub loadRSA {
     }
 
     if (!$rsa_loaded) {
-	eval ("require $rsa_module"); # No need to import the namespace
-	$rsa_loaded++;
+      eval ("require $rsa_module"); # No need to import the namespace
+      $rsa_loaded++;
     }
     # Initialize Encryption
     if ($conf->exists('encryptionpublickey') && $conf->config('encryptionpublickey') ne '') {
