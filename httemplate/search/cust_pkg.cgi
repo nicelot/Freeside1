@@ -156,8 +156,8 @@ my %search_hash = ();
 $search_hash{'query'} = $cgi->keywords;
 
 #scalars
-for (qw( agentnum cust_main_salesnum salesnum custnum magic status custom
-         cust_fields pkgbatch
+for (qw( agentnum cust_status cust_main_salesnum salesnum custnum magic status
+         custom cust_fields pkgbatch
     )) 
 {
   $search_hash{$_} = $cgi->param($_) if length($cgi->param($_));
@@ -174,6 +174,10 @@ for my $param (qw( censustract censustract2 )) {
   $search_hash{$param} = $cgi->param($param) || ''
     if grep { $_ eq $param } $cgi->param;
 }
+
+#location flags (checkboxes)
+my @loc = grep /^\w+$/, $cgi->param('loc');
+$search_hash{"location_$_"} = 1 foreach @loc;
 
 my $report_option = $cgi->param('report_option');
 $search_hash{report_option} = $report_option if $report_option;

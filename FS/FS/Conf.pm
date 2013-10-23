@@ -935,7 +935,19 @@ sub reason_type_options {
     'type'        => 'text',
     'per_agent'   => 1,
   },
-  
+
+  {
+    'key'         => 'billco-account_num',
+    'section'     => 'billing',
+    'description' => 'The data to place in the "Transaction Account No" / "TRACCTNUM" field.',
+    'type'        => 'select',
+    'select_hash' => [
+                       'invnum-date' => 'Invoice number - Date (default)',
+                       'display_custnum'  => 'Customer number',
+                     ],
+    'per_agent'   => 1,
+  },
+
   {
     'key'         => 'next-bill-ignore-time',
     'section'     => 'billing',
@@ -4050,7 +4062,7 @@ and customer address. Include units.',
     'type'        => 'select',
     'multiple'    => 1,
     'select_hash' => [ 
-      #'address1' => 'Billing address',
+      'address' => 'Billing or service address',
     ],
   },
 
@@ -4169,6 +4181,13 @@ and customer address. Include units.',
   },
 
   {
+    'key'         => 'previous_balance-payments_since',
+    'section'     => 'invoicing',
+    'description' => 'Instead of showing payments (and credits) applied to the invoice, show those received since the previous invoice date.',
+    'type'        => 'checkbox',
+  },
+
+  {
     'key'         => 'balance_due_below_line',
     'section'     => 'invoicing',
     'description' => 'Place the balance due message below a line.  Only meaningful when when invoice_sections is false.',
@@ -4188,8 +4207,9 @@ and customer address. Include units.',
     'description' => 'Method for standardizing customer addresses.',
     'type'        => 'select',
     'select_hash' => [ '' => '', 
-                       'usps' => 'U.S. Postal Service',
+                       'usps'     => 'U.S. Postal Service',
                        'ezlocate' => 'EZLocate',
+                       'tomtom'   => 'TomTom',
                      ],
   },
 
@@ -4204,6 +4224,13 @@ and customer address. Include units.',
     'key'         => 'usps_webtools-password',
     'section'     => 'UI',
     'description' => 'Production password for USPS web tools.   Enables USPS address standardization.  See <a href="http://www.usps.com/webtools/">USPS website</a>, register and agree not to use the tools for batch purposes.',
+    'type'        => 'text',
+  },
+
+  {
+    'key'         => 'tomtom-userid',
+    'section'     => 'UI',
+    'description' => 'TomTom geocoding service API key.  See <a href="http://www.tomtom.com/">the TomTom website</a> to obtain a key.  This is recommended for addresses in the United States only.',
     'type'        => 'text',
   },
 
@@ -4238,9 +4265,9 @@ and customer address. Include units.',
   {
     'key'         => 'census_year',
     'section'     => 'UI',
-    'description' => 'The year to use in census tract lookups.  NOTE: you need to select 2012 for Year 2010 Census tract codes.  A selection of 2011 or 2010 provides Year 2000 Census tract codes.  Use the freeside-censustract-update tool if exisitng customers need to be changed.',
+    'description' => 'The year to use in census tract lookups.  NOTE: you need to select 2012 or 2013 for Year 2010 Census tract codes.  A selection of 2011 provides Year 2000 Census tract codes.  Use the freeside-censustract-update tool if exisitng customers need to be changed.',
     'type'        => 'select',
-    'select_enum' => [ qw( 2012 2011 2010 ) ],
+    'select_enum' => [ qw( 2013 2012 2011 ) ],
   },
 
   {
@@ -5509,6 +5536,13 @@ and customer address. Include units.',
     'section'     => 'UI',
     'description' => 'When using an external authentication module, specifies the default access groups for autocreated users, via a template user.',
     'type'        => 'text',
+  },
+
+  {
+    'key'         => 'allow_invalid_cards',
+    'section'     => '',
+    'description' => 'Accept invalid credit card numbers.  Useful for testing with fictitious customers.  There is no good reason to enable this in production.',
+    'type'        => 'checkbox',
   },
 
   { key => "apacheroot", section => "deprecated", description => "<b>DEPRECATED</b>", type => "text" },
