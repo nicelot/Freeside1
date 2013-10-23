@@ -155,7 +155,6 @@ sub _upgrade_data {
       die "error creating phone type '$_': $error" if $error;
     }
   }
-
   foreach my $cust_main (qsearch('cust_main', { bill_locationnum => '' })) {
     # Step 1: extract billing and service addresses into cust_location
     my $custnum = $cust_main->custnum;

@@ -5544,6 +5544,26 @@ and customer address. Include units.',
     'description' => 'Accept invalid credit card numbers.  Useful for testing with fictitious customers.  There is no good reason to enable this in production.',
     'type'        => 'checkbox',
   },
+  {
+    'key'         => 'memcache',
+    'section'     => 'UI',
+    'description' => 'Enable Usage of a memcache system.',
+    'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'memcache-servers',
+    'section'     => 'UI',
+    'description' => 'list of Memcache servers to give as parameter for initialization',
+    'type'        => 'textarea',
+  },
+
+  {
+    'key'         => 'cache_expire',
+    'section'     => 'cache',
+    'description' => 'Number of seconds to automatically age off any cached data',
+    'type'        => 'text',
+  },
 
   { key => "apacheroot", section => "deprecated", description => "<b>DEPRECATED</b>", type => "text" },
   { key => "apachemachine", section => "deprecated", description => "<b>DEPRECATED</b>", type => "text" },

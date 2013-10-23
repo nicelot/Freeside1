@@ -28,9 +28,9 @@ MASONDATA = ${FREESIDE_CACHE}/masondata
 DIST_CONF = ${FREESIDE_CONF}/default_conf
 
 #mod_perl v2 1.999_22 on Apache 2.0 through 2.3 (Debian ancient through 7.x)
-#APACHE_VERSION=2
+APACHE_VERSION=2
 #Apache 2.4 (Debian 8.x)
-APACHE_VERSION=2.4
+#APACHE_VERSION=2.4
 
 #deb
 #FREESIDE_DOCUMENT_ROOT = /var/www/freeside

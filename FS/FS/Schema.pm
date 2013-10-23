@@ -1194,7 +1194,7 @@ sub tables_hashref {
                    [ 'custbatch' ],
                    [ 'referral_custnum' ],
                    [ 'payby' ], [ 'paydate' ],
-                   [ 'archived' ],
+                   [ 'archived' ],[ 'bill_locationnum' ],['ship_locationnum'],
                  ],
     },
 
