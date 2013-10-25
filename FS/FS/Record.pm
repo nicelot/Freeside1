@@ -488,10 +488,12 @@ sub qsearch {
     if ( eval 'FS::'. $table. '->can(\'new\')' eq \&new ) {
       #derivied class didn't override new method, so this optimization is safe
       if ( $cache ) {
+        warn "[debug]$me Try Cache On New\n" if $DEBUG> 1;
         @return = map {
           new_or_cached( "FS::$table", { %{$_} }, $cache )
         } values(%result);
       } else {
+        warn "[debug]$me NO Cache On New\n" if $DEBUG> 1;
         @return = map {
           new( "FS::$table", { %{$_} } )
         } values(%result);
@@ -499,6 +501,7 @@ sub qsearch {
     } else {
       #okay, its been tested
       # warn "untested code (class FS::$table uses custom new method)";
+      warn "[debug]$me Else Case\n" if $DEBUG> 1;
       @return = map {
         eval 'FS::'. $table. '->new( { %{$_} } )';
       } values(%result);
@@ -523,6 +526,7 @@ sub qsearch {
   } else {
     cluck "warning: FS::$table not loaded; returning FS::Record objects"
       unless $nowarn_classload;
+    warn "[debug]$me WTF?\n" if $DEBUG> 1;
     @return = map {
       FS::Record->new( $table, { %{$_} } );
     } values(%result);

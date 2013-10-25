@@ -1,10 +1,10 @@
 package FS::UID;
 
 use strict;
-use vars qw(
-  @ISA @EXPORT_OK $DEBUG $me $cgi $freeside_uid $conf_dir $cache_dir
-  $secrets $datasrc $db_user $db_pass $schema $dbh $driver_name
-  $AutoCommit %callback @callback $callback_hack $use_confcompat
+our (
+  @ISA, @EXPORT_OK, $DEBUG, $me, $cgi, $freeside_uid, $conf_dir, $cache_dir,
+  $secrets, $datasrc, $db_user, $db_pass, $schema, $dbh, $driver_name,
+  $AutoCommit, %callback, @callback, $callback_hack, $use_confcompat,
 );
 use subs qw( getsecrets );
 use Exporter;
@@ -331,6 +331,28 @@ Returns true whenever we should use 1.7 configuration compatibility.
 
 sub use_confcompat {
   $use_confcompat;
+}
+
+=item get_cached 
+
+Returns a cache object if configured
+
+=cut
+
+sub get_cached {
+  my $cached = undef;
+  my $conf = new FS::Conf;
+  if($conf->exists('memcache')){
+    require Cache::Memcached::Fast;
+    $cached = new Cache::Memcache::Fast {
+      servers   => [ $conf->config( 'memcache-server' ) ],
+      namespace => 'FS:',
+      close_on_error => 1,
+      max_failures => 3,
+      failure_timeout => 2,
+    }
+  }
+  return $cached;
 }
 
 =back
