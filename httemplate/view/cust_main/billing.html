@@ -32,7 +32,7 @@
 % }
 
 % if ( $conf->exists('cust_main-select-billday') 
-%    && ($cust_main->payby eq 'CARD' || $cust_main->payby eq 'TOKN' || $cust_main->payby eq 'CHEK') ) {
+%    && ($cust_main->payby eq 'CARD' || $cust_main->payby eq 'CHEK') ) {
 <TR>
   <TD ALIGN="right"><% mt('Billing day of month') |h %></TD>
   <TD BGCOLOR="#ffffff"><% $cust_main->billday %>
@@ -43,9 +43,9 @@
 <TR>
   <TD ALIGN="right"><% mt('Billing type') |h %></TD>
   <TD BGCOLOR="#ffffff">
-% if ( $cust_main->payby eq 'CARD' || $cust_main->payby eq 'TOKN' || $cust_main->payby eq 'DCRD' ) { 
+% if ( $cust_main->payby eq 'CARD' || $cust_main->payby eq 'DCRD' ) { 
 
-%   my $autodemand = ($cust_main->payby eq 'CARD' || $cust_main->payby eq 'TOKN') ? 'automatic' : 'on-demand';
+%   my $autodemand = ($cust_main->payby eq 'CARD') ? 'automatic' : 'on-demand';
     <% mt("Credit card ([_1])",$autodemand) |h %>
   </TD>
 </TR>
