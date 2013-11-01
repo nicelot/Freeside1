@@ -420,7 +420,7 @@ sub transaction_status {
 }
 
 sub access_right {
-  warn "WARNING: no access rights available w/ external RT";
+  warn "WARNING: no access rights available w/ external RT" if $DEBUG;
   0;
 }
 
