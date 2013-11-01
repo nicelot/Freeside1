@@ -64,7 +64,7 @@ sub payinfo {
 
   if ( defined($payinfo) ) {
     $self->setfield('payinfo', $payinfo);
-    $self->paymask($self->mask_payinfo) unless $payinfo =~ /^99\d{14}$/; #token
+    $self->paymask($self->mask_payinfo) unless $payinfo =~ /^(99\d{14}|card_token:.+)$/; #token
   } else {
     $self->getfield('payinfo');
   }
@@ -159,8 +159,6 @@ sub mask_payinfo {
              substr($account,(length($account)-2)).
              ( length($aba) ? "@".$aba : '');
 
-    } elsif ($payby eq 'TOKN') {
-        # do nothing
     } else { # Tie up loose ends
       return $payinfo;
     }
@@ -200,6 +198,8 @@ sub payinfo_check {
   if ( $self->payby eq 'CARD' && ! $self->is_encrypted($self->payinfo) ) {
     my $payinfo = $self->payinfo;
     if ( $ignore_masked_payinfo and $self->mask_payinfo eq $self->payinfo ) {
+      # allow it
+    } elsif ( $payinfo =~ /^card_token:./) {
       # allow it
     } else {
       $payinfo =~ s/\D//g;

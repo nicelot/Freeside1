@@ -1665,6 +1665,7 @@ sub tables_hashref {
         'manual',       'char',    'NULL',   1, '', '',
         'discount_term','int',     'NULL',  '', '', '',
         'failure_status','varchar','NULL',  16, '', '',
+        'order_number','varchar', 'NULL', $char_d, '', '', # transaction number
       ],
       'primary_key' => 'paypendingnum',
       'unique'      => [ [ 'payunique' ] ],
