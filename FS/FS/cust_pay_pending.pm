@@ -182,6 +182,15 @@ otherwise returns false.
 
 # the insert method can be inherited from FS::Record
 
+sub insert {
+  my $self = shift;
+
+  # we do not need to encrypt tokens. and it's easier to show auditors your using tokens if they are not encrypted
+  local @encrypted_fields = grep( $_ ne 'payinfo', @encrypted_fields ) if $self->payinfo =~ /^card_token:./;
+
+  $self->SUPER::insert;
+}
+
 =item delete
 
 Delete this record from the database.
@@ -198,6 +207,15 @@ returns the error, otherwise returns false.
 =cut
 
 # the replace method can be inherited from FS::Record
+
+sub replace {
+  my $self = shift;
+
+  # we do not need to encrypt tokens. and it's easier to show auditors your using tokens if they are not encrypted
+  local @encrypted_fields = grep( $_ ne 'payinfo', @encrypted_fields ) if $self->payinfo =~ /^card_token:./;
+
+  $self->SUPER::replace;
+}
 
 =item check
 

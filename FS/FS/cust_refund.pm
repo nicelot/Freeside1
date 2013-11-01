@@ -127,6 +127,9 @@ sub insert {
   local $SIG{TSTP} = 'IGNORE';
   local $SIG{PIPE} = 'IGNORE';
 
+  # we do not need to encrypt tokens. and it's easier to show auditors your using tokens if they are not encrypted
+  local @encrypted_fields = grep( $_ ne 'payinfo', @encrypted_fields ) if $self->payinfo =~ /^card_token:./;
+
   my $oldAutoCommit = $FS::UID::AutoCommit;
   local $FS::UID::AutoCommit = 0;
   my $dbh = dbh;
@@ -253,6 +256,10 @@ otherwise returns false.
 sub replace {
   my $self = shift;
   return "Can't modify closed refund" if $self->closed =~ /^Y/i;
+
+  # we do not need to encrypt tokens. and it's easier to show auditors your using tokens if they are not encrypted
+  local @encrypted_fields = grep( $_ ne 'payinfo', @encrypted_fields ) if $self->payinfo =~ /^card_token:./;
+
   $self->SUPER::replace(@_);
 }
 
