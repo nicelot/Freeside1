@@ -135,11 +135,7 @@ sub _config {
 
   if( ! $self->{'conf_cache'} ) {
     
-  use Cache::Memcached::Fast;
-  my $cached = new Cache::Memcached::Fast {
-  servers => ['localhost:11211'],
-  } || die "Can't Cached";
-  #my $cached = FS::UID::get_cached if ($name !~ m/^memcache/); ## eeek loop
+  my $cached = FS::UID::get_cached if ($name !~ m/^memcache/); ## eeek loop
 
     $self->{'conf_cache'} = $cached->get('conf_cache') if $cached;
     if( ! $self->{'conf_cache'} ) {
@@ -147,7 +143,7 @@ sub _config {
         my $key = join(':',$c->name, $c->agentnum, $c->locale);
         $self->{'conf_cache'}->{ $key } = $c;
       }
-      $cached->add('conf_cache', $self->{'conf_cache'});
+      $cached->add('conf_cache', $self->{'conf_cache'}) if $cached;
     }
   }
   
@@ -382,6 +378,13 @@ sub set {
     $error = $new->replace($old);
   } else {
     $error = $new->insert;
+  }
+  if (! $error) {
+    # clean the object cache
+    my $key = join(':',$name, $agentnum, $self->{locale});
+    $self->{'conf_cache'}->{ $key } = $new;
+    my $cached = FS::UID::get_cached;
+    $cached->add('conf_cache', $self->{'conf_cache'}) if $cached;
   }
 
   die "error setting configuration value: $error \n"

@@ -415,7 +415,7 @@ my @config_items = grep { !defined($locale) or $_->per_locale }
 my @deleteable = qw( invoice_latexreturnaddress invoice_htmlreturnaddress );
 my %deleteable = map { $_ => 1 } @deleteable;
 
-my @sections = qw(required billing invoicing notification UI self-service ticketing network_monitoring username password session shell BIND telephony );
+my @sections = qw(required billing invoicing notification UI self-service ticketing network_monitoring username password session shell BIND telephony cache);
 push @sections, '', 'deprecated';
 
 my %section_items = ();

@@ -32,6 +32,8 @@ $AutoCommit = 1; #ours, not DBI
 $use_confcompat = 1;
 $callback_hack = 0;
 
+our $cached;
+
 =head1 NAME
 
 FS::UID - Subroutines for database login and assorted other stuff
@@ -340,19 +342,21 @@ Returns a cache object if configured
 =cut
 
 sub get_cached {
-  my $cached = undef;
-  my $conf = new FS::Conf;
-  if($conf->exists('memcache')){
-    require Cache::Memcached::Fast;
-    $cached = new Cache::Memcache::Fast {
-      servers   => [ $conf->config( 'memcache-server' ) ],
-      namespace => 'FS:',
-      close_on_error => 1,
-      max_failures => 3,
-      failure_timeout => 2,
-    }
+  return $cached ||= do{
+    my $conf = new FS::Conf;
+    #if($conf->exists('memcache')){
+      require Cache::Memcached::Fast;
+      $cached = new Cache::Memcached::Fast {
+        #servers   => [ $conf->config( 'memcache-server' ) ],
+        servers => ['localhost:11211'],
+        namespace => 'FS:',
+        close_on_error => 1,
+        max_failures => 3,
+        failure_timeout => 2,
+      };  #TODO: OR DIE
+      #}
+    $cached;
   }
-  return $cached;
 }
 
 =back
