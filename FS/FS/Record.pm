@@ -58,9 +58,6 @@ my $rsa_decrypt;
 
 $conf = '';
 $conf_encryption = '';
-
-our $cached;
-
 FS::UID->install_callback( sub {
 
   eval "use FS::Conf;";
@@ -80,8 +77,6 @@ FS::UID->install_callback( sub {
   } else {
     eval "sub PG_BYTEA { die 'guru meditation #9: calling PG_BYTEA when not running Pg?'; }";
   }
-
-  $cached = FS::UID::get_cached;
 
 } );
 
@@ -372,26 +367,7 @@ sub qsearch {
   my @value = ();
   my @bind_type = ();
   my $dbh = dbh;
-
-  ##TODO: if one table/keyed lookup, try cache...
-  if( @stable == 1 
-      && $record->{$pkey} ## crap
-    ){
-    ##TODO: Lookup from the cache!
-   warn "$stable:$pkey:" . $record->{$pkey} .":". $cached->get(  $stable . '::Object::' . $record->{$pkey} );
-    #Hash vs object?
-    if( $cached 
-        && $record->{ $pkey }
-        && $cached->get( $stable . '::Object::' . $record->{$pkey} )) {
-        ## FOUND
-        # TODO: why call twice
-        warn "[debug]$me Cached Object FOUND in Qsearch\n";
-        my $return_obj = $cached->get( $stable . '::Object::' . $record->{$pkey} );
-        #push(@return, $return_obj);
-    }
-  }
   foreach my $stable ( @stable ) {
-  warn "Searching $stable\n";
     #stop altering the caller's hashref
     my $record      = { %{ shift(@record) || {} } };#and be liberal in receipt
     my $select      = shift @select;
@@ -412,8 +388,6 @@ sub qsearch {
       or die "No schema for table $table found - ".
              "do you need to run freeside-upgrade?";
     my $pkey = $dbdef_table->primary_key;
-
-
 
     my @real_fields = grep exists($record->{$_}), real_fields($table);
 
@@ -503,10 +477,6 @@ sub qsearch {
   my @stuff = @{ $sth->fetchall_arrayref( {} ) };
   if ( $pkey && scalar(@stuff) && $stuff[0]->{$pkey} ) {
     %result = map { $_->{$pkey}, $_ } @stuff;
-    ## TODO: CACHE the hash here?
-    #
-    #
-    #
   } else {
     @result{@stuff} = @stuff;
   }
@@ -524,25 +494,9 @@ sub qsearch {
         } values(%result);
       } else {
         warn "[debug]$me NO Cache On New\n" if $DEBUG> 1;
-        #@return = map {
-        #  new( "FS::$table", { %{$_} } )
-        #} values(%result);
-
-        foreach  my $key ( keys %result ) {
-          ## Store it
-          ## TODO: Benchmark just storing the hash vs the object
-          #
-          #Do I need to wait because of decryption?
-          use Data::Dumper;
-          warn "[debug]$me Adding Hash to cache: $table:$pkey\n". Dumper($result{$key});
-          $cached->add($table . '::Hash::'. $key, $result{$key}); ##TODO: time and failure case
-          push(@return, new( "FS::$table", $result{$key} ));
-        }
-
-        ## TODO: CACHE objects on regular new case
-        #
-        #
-        #
+        @return = map {
+          new( "FS::$table", { %{$_} } )
+        } values(%result);
       }
     } else {
       #okay, its been tested
@@ -568,10 +522,6 @@ sub qsearch {
           $record->setfield($field, $record->decrypt($record->getfield($field)));
         }
       }
-    }
-    foreach my $value (@return) {
-      warn "[debug]$me Adding object to cache: $table:$pkey\n";
-      $cached->add($table . '::Object::' . $value->$pkey , $result{$value->$pkey}); ##TODO: time and failure case
     }
   } else {
     cluck "warning: FS::$table not loaded; returning FS::Record objects"
