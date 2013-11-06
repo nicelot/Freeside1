@@ -394,8 +394,7 @@ use Data::Dumper;
     if( @stable == 1 && $cached && $record->{$pkey}){
       $cached_value = $cached->get( $cached_key );
       if ($cached_value && ((ref $cached_value) =~ /^FS::/) ) {
-        warn "FOUND CACHED VALUE - $cached_key" if $DEBUG > 1;
-        _decrypt_fields($table,$cached_value) if ( $conf_encryption && eval '@FS::'. $stable . '::encrypted_fields' );
+        warn "FOUND CACHED VALUE - $cached_key" if $DEBUG > 2;
         return ($cached_value);
       }
     }
@@ -530,10 +529,6 @@ use Data::Dumper;
         $cached->set($cached_key , $record); ##TODO: time and failure case
       }
     }
-
-    # Check for encrypted fields and decrypt them.
-   ## only in the local copy, not the cached object
-   _decrypt_fields($table,@return) if ( $conf_encryption && eval '@FS::'. $table . '::encrypted_fields' );
   } else {
     cluck "warning: FS::$table not loaded; returning FS::Record objects"
       unless $nowarn_classload;
@@ -543,21 +538,6 @@ use Data::Dumper;
     } values(%result);
   }
   return @return;
-}
-
-sub _decrypt_fields {
-  my $table = shift;
-  foreach my $record (@_) {
-    foreach my $field (eval '@FS::'. $table . '::encrypted_fields') {
-      next if $field eq 'payinfo' 
-                && ($record->isa('FS::payinfo_transaction_Mixin') 
-                    || $record->isa('FS::payinfo_Mixin') )
-                && $record->payby
-                && !grep { $record->payby eq $_ } @encrypt_payby;
-      # Set it directly... This may cause a problem in the future...
-      $record->setfield($field, $record->decrypt($record->getfield($field)));
-    }
-  }
 }
 
 =item _query
@@ -1004,15 +984,29 @@ sub AUTOLOAD {
   my($self,$value)=@_;
   my($field)=$AUTOLOAD;
   $field =~ s/.*://;
+
   if ( defined($value) ) {
     confess "errant AUTOLOAD $field for $self (arg $value)"
       unless blessed($self) && $self->can('setfield');
-    $self->setfield($field,$value);
   } else {
     confess "errant AUTOLOAD $field for $self (no args)"
       unless blessed($self) && $self->can('getfield');
-    $self->getfield($field);
-  }    
+  }
+
+  # autoload is SLOW, lets push an actual sub in to make this 3x faster in future calls
+  no strict 'refs'; ## no critic
+  my $method = (ref $self).'::'.$field;
+  warn "[debug]$me creating autoload for $method\n" if $DEBUG > 1;
+  *$method = sub {
+      my ($self,$value) = @_;
+      if ( defined($value) ) {
+        $self->setfield($field,$value);
+      } else {
+        $self->getfield($field);
+      }
+  };
+
+  $self->$field($value);
 }
 
 # efficient
