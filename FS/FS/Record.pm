@@ -1310,11 +1310,16 @@ sub insert {
 
   dbh->commit or croak dbh->errstr if $FS::UID::AutoCommit;
 
-  # Now that it has been saved, reset the encrypted fields so that $new 
-  # can still be used.
-  foreach my $field (keys %{$saved}) {
-    $self->setfield($field, $saved->{$field});
+  if ($cached) {
+      # clear the cache
+      my $cached_key = $table . '::Object::' . $primary_key;
+      warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
+      $cached->set($cached_key , $self); ##TODO: time and failure case
   }
+
+  # Now that it has been saved, reset the encrypted fields so that $new
+  # can still be used.
+  $self->{'decrypted'} = {} if $self->{'decrypted'};
 
   '';
 }
@@ -1379,6 +1384,13 @@ sub delete {
   $h_sth->execute or return $h_sth->errstr if $h_sth;
   
   dbh->commit or croak dbh->errstr if $FS::UID::AutoCommit;
+
+  if ($cached) {
+      # clear the cache
+      my $cached_key = $self->table . '::Object::' . $primary_key;
+      warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
+      $cached->delete($cached_key); ##TODO: time and failure case
+  }
 
   #no need to needlessly destoy the data either (causes problems actually)
   #undef $self; #no need to keep object!
@@ -1521,11 +1533,16 @@ sub replace {
 
   dbh->commit or croak dbh->errstr if $FS::UID::AutoCommit;
 
-  # Now that it has been saved, reset the encrypted fields so that $new 
-  # can still be used.
-  foreach my $field (keys %{$saved}) {
-    $new->setfield($field, $saved->{$field});
+  if ($cached) {
+      # clear the cache
+      my $cached_key = $new->table . '::Object::' . $primary_key;
+      warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
+      $cached->set($cached_key , $new); ##TODO: time and failure case
   }
+
+  # Now that it has been saved, reset the encrypted fields so that $new
+  # can still be used.
+  $new->{'decrypted'} = {} if $new->{'decrypted'};
 
   '';
 
