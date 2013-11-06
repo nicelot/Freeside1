@@ -344,17 +344,17 @@ Returns a cache object if configured
 sub get_cached {
   return $cached ||= do{
     my $conf = new FS::Conf;
-    #if($conf->exists('memcache')){
+    if($conf->exists('memcache')){
       require Cache::Memcached::Fast;
       $cached = new Cache::Memcached::Fast {
-        #servers   => [ $conf->config( 'memcache-server' ) ],
+      #servers   => [ $conf->config( 'memcache-server' ) ],
         servers => ['localhost:11211'],
         namespace => 'FS:',
         close_on_error => 1,
         max_failures => 3,
         failure_timeout => 2,
       };  #TODO: OR DIE
-      #}
+    }
     $cached;
   }
 }

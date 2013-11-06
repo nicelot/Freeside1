@@ -325,6 +325,7 @@ sub qsearch {
   my( @select, @extra_sql, @extra_param, @order_by, @addl_from );
   my @debug = ();
   my %union_options = ();
+use Data::Dumper;
   if ( ref($_[0]) eq 'ARRAY' ) {
     my $optlist = shift;
     %union_options = @_;
@@ -370,13 +371,6 @@ sub qsearch {
   foreach my $stable ( @stable ) {
     #stop altering the caller's hashref
     my $record      = { %{ shift(@record) || {} } };#and be liberal in receipt
-    my $select      = shift @select;
-    my $extra_sql   = shift @extra_sql;
-    my $extra_param = shift @extra_param;
-    my $order_by    = shift @order_by;
-    my $cache       = shift @cache;
-    my $addl_from   = shift @addl_from;
-    my $debug       = shift @debug;
 
     #$stable =~ /^([\w\_]+)$/ or die "Illegal table: $table";
     #for jsearch
@@ -388,6 +382,25 @@ sub qsearch {
       or die "No schema for table $table found - ".
              "do you need to run freeside-upgrade?";
     my $pkey = $dbdef_table->primary_key;
+
+    ##TODO: if one table/keyed lookup, try cache...
+    my $cached_key = $stable . '::Object::' . $record->{$pkey};
+    my $cached_value;
+    if( @stable == 1 && $cached && $record->{$pkey}){
+      $cached_value = $cached->get( $cached_key );
+      if ($cached_value && ((ref $cached_value) =~ /^FS::/) ) {
+        warn "FOUND CACHED VALUE - $cached_key" if $DEBUG > 2;
+        return ($cached_value);
+      }
+    }
+
+    my $select      = shift @select;
+    my $extra_sql   = shift @extra_sql;
+    my $extra_param = shift @extra_param;
+    my $order_by    = shift @order_by;
+    my $cache       = shift @cache;
+    my $addl_from   = shift @addl_from;
+    my $debug       = shift @debug;
 
     my @real_fields = grep exists($record->{$_}), real_fields($table);
 
@@ -404,7 +417,6 @@ sub qsearch {
     push @statement, $statement;
 
     warn "[debug]$me $statement\n" if $DEBUG > 1 || $debug;
- 
 
     foreach my $field (
       grep defined( $record->{$_} ) && $record->{$_} ne '', @real_fields
@@ -488,12 +500,10 @@ sub qsearch {
     if ( eval 'FS::'. $table. '->can(\'new\')' eq \&new ) {
       #derivied class didn't override new method, so this optimization is safe
       if ( $cache ) {
-        warn "[debug]$me Try Cache On New\n" if $DEBUG> 1;
         @return = map {
           new_or_cached( "FS::$table", { %{$_} }, $cache )
         } values(%result);
       } else {
-        warn "[debug]$me NO Cache On New\n" if $DEBUG> 1;
         @return = map {
           new( "FS::$table", { %{$_} } )
         } values(%result);
@@ -501,26 +511,17 @@ sub qsearch {
     } else {
       #okay, its been tested
       # warn "untested code (class FS::$table uses custom new method)";
-      warn "[debug]$me Else Case\n" if $DEBUG> 1;
       @return = map {
         eval 'FS::'. $table. '->new( { %{$_} } )';
       } values(%result);
     }
 
-    # Check for encrypted fields and decrypt them.
-   ## only in the local copy, not the cached object
-    if ( $conf_encryption 
-         && eval '@FS::'. $table . '::encrypted_fields' ) {
+    if ($cached) {
       foreach my $record (@return) {
-        foreach my $field (eval '@FS::'. $table . '::encrypted_fields') {
-          next if $field eq 'payinfo' 
-                    && ($record->isa('FS::payinfo_transaction_Mixin') 
-                        || $record->isa('FS::payinfo_Mixin') )
-                    && $record->payby
-                    && !grep { $record->payby eq $_ } @encrypt_payby;
-          # Set it directly... This may cause a problem in the future...
-          $record->setfield($field, $record->decrypt($record->getfield($field)));
-        }
+        # this must be cached before decrypting data
+        my $cached_key = $table . '::Object::' . $record->$pkey;
+        warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
+        $cached->set($cached_key , $record); ##TODO: time and failure case
       }
     }
   } else {
@@ -978,15 +979,29 @@ sub AUTOLOAD {
   my($self,$value)=@_;
   my($field)=$AUTOLOAD;
   $field =~ s/.*://;
+
   if ( defined($value) ) {
     confess "errant AUTOLOAD $field for $self (arg $value)"
       unless blessed($self) && $self->can('setfield');
-    $self->setfield($field,$value);
   } else {
     confess "errant AUTOLOAD $field for $self (no args)"
       unless blessed($self) && $self->can('getfield');
-    $self->getfield($field);
-  }    
+  }
+
+  # autoload is SLOW, lets push an actual sub in to make this 3x faster in future calls
+  no strict 'refs'; ## no critic
+  my $method = (ref $self).'::'.$field;
+  warn "[debug]$me creating autoload for $method\n" if $DEBUG > 1;
+  *$method = sub {
+      my ($self,$value) = @_;
+      if ( defined($value) ) {
+        $self->setfield($field,$value);
+      } else {
+        $self->getfield($field);
+      }
+  };
+
+  $self->$field($value);
 }
 
 # efficient

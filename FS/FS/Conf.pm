@@ -134,16 +134,22 @@ sub _config {
   # try with the agentnum first, then fall back to no agentnum if allowed
 
   if( ! $self->{'conf_cache'} ) {
-    
-  my $cached = FS::UID::get_cached if ($name !~ m/^memcache/); ## eeek loop
+    ## is this checking for memcache itself? if so we don't want a inifinite loop!
+    #  So we'll handle is in a special manner
+    if( $name =~ m/^memcache/ ) {
+      return FS::Record::qsearchs('conf', { name => $name } );
+    }
+    else {
+      my $cached = FS::UID::get_cached;
 
-    $self->{'conf_cache'} = $cached->get('conf_cache') if $cached;
-    if( ! $self->{'conf_cache'} ) {
-      foreach my $c (qsearch('conf')) {
-        my $key = join(':',$c->name, $c->agentnum, $c->locale);
-        $self->{'conf_cache'}->{ $key } = $c;
+      $self->{'conf_cache'} = $cached->get('conf_cache') if $cached;
+      if( ! $self->{'conf_cache'} ) {
+        foreach my $c (qsearch('conf')) {
+          my $key = join(':',$c->name, $c->agentnum, $c->locale);
+          $self->{'conf_cache'}->{ $key } = $c;
+        }
+        $cached->set('conf_cache', $self->{'conf_cache'}) if $cached;
       }
-      $cached->add('conf_cache', $self->{'conf_cache'}) if $cached;
     }
   }
   
@@ -384,7 +390,7 @@ sub set {
     my $key = join(':',$name, $agentnum, $self->{locale});
     $self->{'conf_cache'}->{ $key } = $new;
     my $cached = FS::UID::get_cached;
-    $cached->add('conf_cache', $self->{'conf_cache'}) if $cached;
+    $cached->set('conf_cache', $self->{'conf_cache'}) if $cached;
   }
 
   die "error setting configuration value: $error \n"
