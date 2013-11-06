@@ -27,6 +27,7 @@ use FS::SearchCache;
 use FS::Msgcat qw(gettext);
 use JSON qw(to_json);
 #use FS::Conf; #dependency loop bs, in install_callback below instead
+use Data::Dumper;
 
 use FS::part_virtual_field;
 
@@ -58,6 +59,8 @@ my $rsa_decrypt;
 
 $conf = '';
 $conf_encryption = '';
+our $cached;
+
 FS::UID->install_callback( sub {
 
   eval "use FS::Conf;";
@@ -325,7 +328,6 @@ sub qsearch {
   my( @select, @extra_sql, @extra_param, @order_by, @addl_from );
   my @debug = ();
   my %union_options = ();
-use Data::Dumper;
   if ( ref($_[0]) eq 'ARRAY' ) {
     my $optlist = shift;
     %union_options = @_;
@@ -1673,7 +1675,6 @@ files.  Currently only supports a single file named "file".
 =cut
 
 use Storable qw(thaw);
-use Data::Dumper;
 use MIME::Base64;
 sub process_batch_import {
   my($job, $opt) = ( shift, shift );
@@ -1773,7 +1774,6 @@ csv, xls, fixedlength, xml
 
 =cut
 
-use Data::Dumper;
 sub batch_import {
   my $param = shift;
 
