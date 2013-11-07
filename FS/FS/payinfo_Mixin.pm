@@ -66,7 +66,12 @@ sub payinfo {
     $self->setfield('payinfo', $payinfo);
     $self->paymask($self->mask_payinfo) unless $payinfo =~ /^(99\d{14}|card_token:.+)$/; #token
   } else {
-    $self->getfield('payinfo');
+    if ($self->{'decrypted'}->{'payinfo'}) {
+      $self->getfield('payinfo');
+    } else {
+      $self->{'decrypted'}->{'payinfo'} = 1;
+      $self->setfield('payinfo',$self->decrypt($self->getfield('payinfo')));
+    }
   }
 }
 
@@ -84,7 +89,12 @@ sub paycvv {
   if ( defined($paycvv) ) {
     $self->setfield('paycvv', $paycvv);
   } else {
-    $self->getfield('paycvv');
+    if ($self->{'decrypted'}->{'paycvv'}) {
+      $self->getfield('paycvv');
+    } else {
+      $self->{'decrypted'}->{'paycvv'} = 1;
+      $self->setfield('paycvv',$self->decrypt($self->getfield('paycvv')));
+    }
   }
 }
 

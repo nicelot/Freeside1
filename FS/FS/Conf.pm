@@ -1,6 +1,6 @@
 package FS::Conf;
 
-use vars qw($base_dir @config_items @base_items @card_types $DEBUG);
+our ($base_dir, @config_items, @base_items, @card_types, $DEBUG);
 use Carp;
 use IO::File;
 use File::Basename;
@@ -120,6 +120,7 @@ sub _config {
   my($self,$name,$agentnum,$agentonly)=@_;
   my $hashref = { 'name' => $name };
   local $FS::Record::conf = undef;  # XXX evil hack prevents recursion
+  #my $DEBUG = 5;
   my $cv;
   my @a = (
     ($agentnum || ()),
@@ -129,13 +130,37 @@ sub _config {
     ($self->{locale} || ()),
     ($self->{localeonly} && $self->{locale} ? () : '')
   );
+
   # try with the agentnum first, then fall back to no agentnum if allowed
+
+  if( ! $self->{'conf_cache'} ) {
+    ## is this checking for memcache itself? if so we don't want a inifinite loop!
+    #  So we'll handle is in a special manner
+    if( $name =~ m/^memcache/ ) {
+      return FS::Record::qsearchs('conf', { name => $name } );
+    }
+    else {
+      my $cached = FS::UID::get_cached;
+
+      $self->{'conf_cache'} = $cached->get('conf_cache') if $cached;
+      if( ! $self->{'conf_cache'} ) {
+        foreach my $c (qsearch('conf')) {
+          my $key = join(':',$c->name, $c->agentnum, $c->locale);
+          $self->{'conf_cache'}->{ $key } = $c;
+        }
+        $cached->set('conf_cache', $self->{'conf_cache'}) if $cached;
+      }
+    }
+  }
+  
   foreach my $a (@a) {
     $hashref->{agentnum} = $a;
     foreach my $l (@l) {
       $hashref->{locale} = $l;
-      $cv = FS::Record::qsearchs('conf', $hashref);
-      return $cv if $cv;
+      my $key = join(':',$name, $a, $l);
+      if ($self->{'conf_cache'}->{$key}){ 
+        return $self->{'conf_cache'}->{$key};
+      }
     }
   }
   return undef;
@@ -359,6 +384,13 @@ sub set {
     $error = $new->replace($old);
   } else {
     $error = $new->insert;
+  }
+  if (! $error) {
+    # clean the object cache
+    my $key = join(':',$name, $agentnum, $self->{locale});
+    $self->{'conf_cache'}->{ $key } = $new;
+    my $cached = FS::UID::get_cached;
+    $cached->set('conf_cache', $self->{'conf_cache'}) if $cached;
   }
 
   die "error setting configuration value: $error \n"
@@ -5554,15 +5586,15 @@ and customer address. Include units.',
   },
   {
     'key'         => 'memcache',
-    'section'     => 'UI',
+    'section'     => 'cache',
     'description' => 'Enable Usage of a memcache system.',
     'type'        => 'checkbox',
   },
 
   {
-    'key'         => 'memcache-servers',
-    'section'     => 'UI',
-    'description' => 'list of Memcache servers to give as parameter for initialization',
+    'key'         => 'memcache-server',
+    'section'     => 'cache',
+    'description' => 'Memcache server to give as parameter for initialization (hostname:port)',
     'type'        => 'textarea',
   },
 
