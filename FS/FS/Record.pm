@@ -389,10 +389,9 @@ use Data::Dumper;
     my $pkey = $dbdef_table->primary_key;
 
     ##TODO: if one table/keyed lookup, try cache...
-    my $cached_key = $stable . '::Object::' . $record->{$pkey};
-    my $cached_value;
     if( @stable == 1 && $cached && $record->{$pkey}){
-      $cached_value = $cached->get( $cached_key );
+      my $cached_key = $stable . '::Object::' . $record->{$pkey};
+      my $cached_value = $cached->get( $cached_key );
       if ($cached_value && ((ref $cached_value) =~ /^FS::/) ) {
         warn "FOUND CACHED VALUE - $cached_key" if $DEBUG > 2;
         return ($cached_value);
