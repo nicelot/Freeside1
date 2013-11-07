@@ -177,12 +177,12 @@ sub callback_setup {
 
 sub myconnect {
   my $handle = DBI->connect( getsecrets(), { 'AutoCommit'         => 0,
-                                             'ChopBlanks'         => 1,
-                                             'ShowErrorStatement' => 1,
-                                             'pg_enable_utf8'     => 1,
-                                             'mysql_enable_utf8'  => 1,
-                                           }
-                           )
+                                            'ChopBlanks'         => 1,
+                                            'ShowErrorStatement' => 1,
+                                            'pg_enable_utf8'     => 1,
+                                            'mysql_enable_utf8'  => 1,
+                                          }
+                          )
     or die "DBI->connect error: $DBI::errstr\n";
 
   if ( $schema ) {
@@ -192,40 +192,10 @@ sub myconnect {
       no warnings 'redefine';
       eval "sub DBIx::DBSchema::DBD::${driver}::default_db_schema {'$schema'}";
       die $@ if $@;
-    my $conn_label = shift || 'main';
-
-    my $secrets = getsecrets();
-    # Select named connection or fall back to 'main'
-    my $conn =  $secrets->{$conn_label}
-                ?   $secrets->{$conn_label}
-                :   $secrets->{'main'};
-
-    my $handle = DBI->connect( 
-        @{$conn}{qw/datasrc db_user db_pass/}, { 
-            'AutoCommit'         => 0,
-            'ChopBlanks'         => 1,
-            'ShowErrorStatement' => 1,
-            'pg_enable_utf8'     => 1,
-            'mysql_enable_utf8'  => 1, 
-        })
-        or die "DBI->connect error: $DBI::errstr\n";
-
-    # Populate these FS::UID global scalars
-    $datasrc = $conn->{'datasrc'};
-    $db_user = $conn->{'db_user'};
-    $db_pass = $conn->{'db_pass'};
-    $schema  = $conn->{'schema'};
-
-    if ( $schema ) {
-        use DBIx::DBSchema::_util qw(_load_driver ); #quelle hack
-        my $driver = _load_driver($handle);
-        if ( $driver =~ /^Pg/ ) {
-            no warnings 'redefine';
-            eval "sub DBIx::DBSchema::DBD::${driver}::default_db_schema {'$schema'}";
-            die $@ if $@;
-        }
     }
-    $handle;
+  }
+
+  $handle;
 }
 
 =item install_callback
@@ -365,33 +335,12 @@ the `/usr/local/etc/freeside/secrets' file.
 =cut
 
 sub getsecrets {
-    # Try to parse secrets file as JSON 
-    my $json_text = read_file("$conf_dir/secrets");
-    my $json = JSON->new;
-    
-    my $structure = {};
-    try {
-        $structure  = $json->decode($json_text);
-        $datasrc    = $structure->{'main'}{'datasrc'};
-        $db_user    = $structure->{'main'}{'db_user'};
-        $db_pass    = $structure->{'main'}{'db_pass'};
-        $schema     = $structure->{'main'}{'schema'};
-    }
-    catch {
-        ($datasrc, $db_user, $db_pass, $schema) = 
-            map { /^(.*)$/; $1 } readline(new IO::File "/tmp/secrets")
-            or die "Can't get secrets: $conf_dir/secrets: $!\n";
-        $structure->{'main'} = {};
-        $structure->{'main'}{'datasrc'} = $datasrc;
-        $structure->{'main'}{'db_user'} = $db_user;
-        $structure->{'main'}{'db_pass'} = $db_pass;
-        $structure->{'main'}{'schema'} = $schema;
-    };
-
-    warn "Secrets file may be invalid." 
-        unless $structure->{'main'}{'datasrc'} =~ /^dbi:\w+/i;
-
-    return $structure;
+     ($datasrc, $db_user, $db_pass, $schema) =
+       map { /^(.*)$/; $1 } readline(new IO::File "$conf_dir/secrets")
+         or die "Can't get secrets: $conf_dir/secrets: $!\n";
+     undef $driver_name;
+   
+     ($datasrc, $db_user, $db_pass);
 }
 
 =item use_confcompat
