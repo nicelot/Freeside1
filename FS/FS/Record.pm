@@ -1311,7 +1311,7 @@ sub insert {
 
   if ($cached) {
       # clear the cache
-      my $cached_key = $table . '::Object::' . $primary_key;
+      my $cached_key = $table . '::Object::' . $self->$primary_key;
       warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
       $cached->set($cached_key , $self); ##TODO: time and failure case
   }
@@ -1386,7 +1386,7 @@ sub delete {
 
   if ($cached) {
       # clear the cache
-      my $cached_key = $self->table . '::Object::' . $primary_key;
+      my $cached_key = $self->table . '::Object::' . $self->$primary_key;
       warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
       $cached->delete($cached_key); ##TODO: time and failure case
   }
@@ -1534,7 +1534,7 @@ sub replace {
 
   if ($cached) {
       # clear the cache
-      my $cached_key = $new->table . '::Object::' . $primary_key;
+      my $cached_key = $new->table . '::Object::' . $new->$primary_key;
       warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
       $cached->set($cached_key , $new); ##TODO: time and failure case
   }
