@@ -196,7 +196,6 @@ sub myconnect {
             die $@ if $@;
         }
     }
-  }
 
   $handle;
 }
