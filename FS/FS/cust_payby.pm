@@ -337,16 +337,6 @@ sub check {
     return "Illegal comp account issuer: ". $self->payinfo if $error;
     $self->paycvv('');
 
-  } elsif ( $self->payby eq 'TOKN' ) {
-    # Hmm, maybe we could make a B:OP->check_token method???
-
-    # Tokens are difficult to validate programatically.
-    # Especially since every gateway does them differently.
-    # But I've never seen a token that doesn't fit into the following checks.
-    my $payinfo = $self->payinfo;
-    return "Illegal token" unless length($payinfo) > 2;
-    return "Illegal token" unless length($payinfo) <= 512; # same length as db
-
   } elsif ( $self->payby eq 'PREPAY' ) {
 
     my $payinfo = $self->payinfo;

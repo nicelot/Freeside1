@@ -315,7 +315,6 @@ sub _bop_content {
 
 my %bop_method2payby = (
   'CC'     => 'CARD',
-  'TOKN'   => 'TOKN',
   'ECHECK' => 'CHEK',
   'LEC'    => 'LECB',
   'PAYPAL' => 'PPAL',
@@ -456,49 +455,12 @@ sub realtime_bop {
 
     if ( $options{method} eq 'CC' ) {
 
-      $content{card_number} = $options{payinfo};
-      $paydate = exists($options{'paydate'})
-                      ? $options{'paydate'}
-                      : $self->paydate;
-      $paydate =~ /^\d{2}(\d{2})[\/\-](\d+)[\/\-]\d+$/;
-      $content{expiration} = "$2/$1";
-
-      my $paycvv = exists($options{'paycvv'})
-                     ? $options{'paycvv'}
-                     : $self->paycvv;
-      $content{cvv2} = $paycvv
-        if length($paycvv);
-
-      my $paystart_month = exists($options{'paystart_month'})
-                             ? $options{'paystart_month'}
-                             : $self->paystart_month;
-
-      my $paystart_year  = exists($options{'paystart_year'})
-                             ? $options{'paystart_year'}
-                             : $self->paystart_year;
-
-      $content{card_start} = "$paystart_month/$paystart_year"
-        if $paystart_month && $paystart_year;
-
-      my $payissue       = exists($options{'payissue'})
-                             ? $options{'payissue'}
-                             : $self->payissue;
-      $content{issue_number} = $payissue if $payissue;
-
-      if ( $self->_bop_recurring_billing(
-             'payinfo'        => $options{'payinfo'},
-             'trans_is_recur' => $trans_is_recur,
-           )
-         )
-      {
-        $content{recurring_billing} = 'YES';
-        $content{acct_code} = 'rebill'
-          if $conf->exists('credit_card-recurring_billing_acct_code');
+      my $tmp_payinfo = $options{payinfo};
+      if ( $tmp_payinfo =~ s/^card_token:// ) {
+        $content{card_token} = $tmp_payinfo;
+      } else {
+        $content{card_number} = $options{payinfo};
       }
-
-    } elsif ( $options{method} eq 'TOKN' ){
-
-      $content{card_number} = $options{payinfo};
       $paydate = exists($options{'paydate'})
                       ? $options{'paydate'}
                       : $self->paydate;
@@ -638,7 +600,13 @@ sub realtime_bop {
     'session_id'        => $options{session_id} || '',
     'jobnum'            => $options{depend_jobnum} || '',
   };
-  $cust_pay_pending->paymask($self->paymask) if $cust_pay_pending->payby eq 'TOKN';
+
+  if ($options{payinfo} =~ /^card_token:/) {
+    $cust_pay_pending->paymask($self->mask_payinfo($bop_method2payby{$options{method}},$self->paymask));
+  } else {
+    $cust_pay_pending->paymask($self->mask_payinfo($bop_method2payby{$options{method}},$options{payinfo}));
+  }
+
   $cust_pay_pending->payunique( $options{payunique} )
     if defined($options{payunique}) && length($options{payunique});
   my $cpp_new_err = $cust_pay_pending->insert; #mutex lost when this is inserted
@@ -677,6 +645,7 @@ sub realtime_bop {
     $transaction->test_transaction(1)
       if $conf->exists('business-onlinepayment-test_transaction');
     $transaction->submit();
+    $cust_pay_pending->order_number($transaction->order_number) if $transaction->can('order_number'); # save this for any transaction not just approvals
   } else {
     if ( $BOP_TESTING_SUCCESS ) {
       $transaction->is_success(1);
@@ -689,10 +658,19 @@ sub realtime_bop {
 
   if ( $transaction->can('card_token') && $transaction->card_token ) {
     $self->card_token($transaction->card_token);
-    $cust_pay_pending->payby('TOKN');
-    $cust_pay_pending->payinfo($transaction->card_token);
+    $cust_pay_pending->payinfo('card_token:'.$transaction->card_token);
     $cust_pay_pending->paymask(substr($content{'card_number'},0,6).'xxxxxx'.substr($content{'card_number'},-4,4))
       if defined $content{'card_number'} && $content{'card_number'} ne $transaction->card_token;
+
+    if ( ($options{auto}) && ( $options{'payinfo'} ne $self->payinfo ) ) {
+      $self->payby($cust_pay_pending->payby);
+      $self->payinfo($cust_pay_pending->payinfo);
+      $self->paymask($cust_pay_pending->paymask);
+      my $error = $self->replace;
+      if ( $error ) {
+        warn "WARNING: error storing token: $error, but proceeding anyway\n";
+      }
+    }
   }
   if ( $transaction->is_success() && $namespace eq 'Business::OnlineThirdPartyPayment' ) {
 
@@ -709,9 +687,6 @@ sub realtime_bop {
     return $cpp_authorized_err if $cpp_authorized_err;
 
     my $auth = $transaction->authorization;
-    my $ordernum = $transaction->can('order_number')
-                   ? $transaction->order_number
-                   : '';
 
     my $capture =
       new Business::OnlinePayment( $payment_gateway->gateway_module,
@@ -723,7 +698,7 @@ sub realtime_bop {
       type           => $options{method},
       action         => $action2,
       $self->_bop_auth(\%options),
-      order_number   => $ordernum,
+      order_number   => $cust_pay_pending->order_number,
       customer_id    => $self->custnum,
       amount         => $options{amount},
       authorization  => $auth,
@@ -742,6 +717,13 @@ sub realtime_bop {
     $capture->test_transaction(1)
       if $conf->exists('business-onlinepayment-test_transaction');
     $capture->submit();
+
+    # Some gateways will not let you refund from the auth order_number.  We need to update to the capture order_number
+    my $ordernum = ($capture->can('order_number') ? $capture->order_number : '') || $cust_pay_pending->order_number;
+    $cust_pay_pending->order_number($ordernum);
+    $cust_pay_pending->status($transaction->is_success() ? 'captured' : 'declined');
+    my $cpp_authorized_err = $cust_pay_pending->replace;
+    return $cpp_authorized_err if $cpp_authorized_err;
 
     unless ( $capture->is_success ) {
       my $e = "Authorization successful but capture failed, custnum #".
@@ -765,23 +747,6 @@ sub realtime_bop {
     my $error = $self->remove_cvv;
     if ( $error ) {
       warn "WARNING: error removing cvv: $error\n";
-    }
-  }
-
-  ###
-  # Tokenize
-  ###
-
-  if ( ($options{auto})
-      && ( $options{'payinfo'} ne $self->payinfo )
-      && ( $transaction->can('card_token') && $transaction->card_token )
-  ) {
-    $self->payinfo($transaction->card_token);
-    $self->payby('TOKN') unless eval{$transaction->{'processor'} eq 'CardFortress'}; # CardFortress legacy tokens
-    $self->paymask(substr($content{'card_number'},0,6).'xxxxxx'.substr($content{'card_number'},-4,4)) if defined $content{'card_number'};
-    my $error = $self->replace;
-    if ( $error ) {
-      warn "WARNING: error storing token: $error, but proceeding anyway\n";
     }
   }
 
@@ -887,9 +852,6 @@ sub _realtime_bop_result {
 
   if ( $transaction->is_success() ) {
 
-    my $order_number = $transaction->order_number
-      if $transaction->can('order_number');
-
     my $cust_pay = new FS::cust_pay ( {
        'custnum'  => $self->custnum,
        'invnum'   => $options{'invnum'},
@@ -904,7 +866,7 @@ sub _realtime_bop_result {
        'gatewaynum'     => ($payment_gateway->gatewaynum || ''),
        'processor'      => $payment_gateway->gateway_module,
        'auth'           => $transaction->authorization,
-       'order_number'   => $order_number || '',
+       'order_number'   => $cust_pay_pending->order_number,
 
     } );
     #doesn't hurt to know, even though the dup check is in cust_pay_pending now
@@ -1607,18 +1569,26 @@ sub realtime_refund_bop {
     if length($payip);
 
   my $payinfo = '';
+  my $paymask = '';
   if ( $options{method} eq 'CC' ) {
 
     if ( $cust_pay ) {
       $content{card_number} = $payinfo = $cust_pay->payinfo;
+      $paymask = $cust_pay->paymask;
       (exists($options{'paydate'}) ? $options{'paydate'} : $cust_pay->paydate)
         =~ /^\d{2}(\d{2})[\/\-](\d+)[\/\-]\d+$/ &&
         ($content{expiration} = "$2/$1");  # where available
     } else {
       $content{card_number} = $payinfo = $self->payinfo;
+      $paymask = $self->paymask;
       (exists($options{'paydate'}) ? $options{'paydate'} : $self->paydate)
         =~ /^\d{2}(\d{2})[\/\-](\d+)[\/\-]\d+$/;
       $content{expiration} = "$2/$1";
+    }
+
+    if ( $content{card_number} =~ s/^card_token:// ) {
+        $content{card_token} = $content{card_number};
+        delete $content{card_number};
     }
 
   } elsif ( $options{method} eq 'ECHECK' ) {
@@ -1687,6 +1657,9 @@ sub realtime_refund_bop {
     'auth'          => $refund->authorization,
     'order_number'  => $order_number,
   } );
+  if ($payinfo =~ /^card_token:/) {
+    $cust_refund->paymask($paymask);
+  }
   my $error = $cust_refund->insert;
   if ( $error ) {
     $cust_refund->paynum(''); #try again with no specific paynum

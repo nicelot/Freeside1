@@ -50,13 +50,6 @@ tie %hash, 'Tie::IxHash',
     longname  => 'Credit card (automatic)',
     realtime  => 1,
   },
-  'TOKN' => {
-    tinyname  => 'token',
-    shortname => 'Credit card token',
-    longname  => 'Credit card token (automatic)',
-    #cust_pay  => 'CARD', #this is a customer type only, payments are CARD...
-    realtime  => 1,
-  },
   'DCRD' => {
     tinyname  => 'card',
     shortname => 'Credit card',
@@ -213,7 +206,6 @@ sub longname {
 
 %payby2bop = (
   'CARD' => 'CC',
-  'TOKN' => 'TOKN',
   'CHEK' => 'ECHECK',
   'MCRD' => 'CC',
   'PPAL' => 'PAYPAL',

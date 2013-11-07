@@ -216,6 +216,9 @@ sub insert {
   local $FS::UID::AutoCommit = 0;
   my $dbh = dbh;
 
+  # we do not need to encrypt tokens. and it's easier to show auditors your using tokens if they are not encrypted
+  local @encrypted_fields = grep( $_ ne 'payinfo', @encrypted_fields ) if $self->payinfo =~ /^card_token:./;
+
   my $cust_bill;
   if ( $self->invnum ) {
     $cust_bill = qsearchs('cust_bill', { 'invnum' => $self->invnum } )
@@ -487,6 +490,10 @@ otherwise returns false.
 sub replace {
   my $self = shift;
   return "Can't modify closed payment" if $self->closed =~ /^Y/i;
+
+  # we do not need to encrypt tokens. and it's easier to show auditors your using tokens if they are not encrypted
+  local @encrypted_fields = grep( $_ ne 'payinfo', @encrypted_fields ) if $self->payinfo =~ /^card_token:./;
+
   $self->SUPER::replace(@_);
 }
 

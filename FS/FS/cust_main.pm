@@ -367,6 +367,9 @@ sub insert {
   local $SIG{TSTP} = 'IGNORE';
   local $SIG{PIPE} = 'IGNORE';
 
+  # we do not need to encrypt tokens. and it's easier to show auditors your using tokens if they are not encrypted
+  local @encrypted_fields = grep( $_ ne 'payinfo', @encrypted_fields ) if $self->payinfo =~ /^card_token:./;
+
   my $oldAutoCommit = $FS::UID::AutoCommit;
   local $FS::UID::AutoCommit = 0;
   my $dbh = dbh;
@@ -1447,6 +1450,9 @@ sub replace {
     return "You are not permitted to create complimentary accounts.";
   }
 
+  # we do not need to encrypt tokens. and it's easier to show auditors your using tokens if they are not encrypted
+  local @encrypted_fields = grep( $_ ne 'payinfo', @encrypted_fields ) if $self->payinfo =~ /^card_token:./;
+
   local($ignore_expired_card) = 1
     if $old->payby  =~ /^(CARD|DCRD)$/
     && $self->payby =~ /^(CARD|DCRD)$/
@@ -1662,13 +1668,25 @@ sub queue_fuzzyfiles_update {
   local $FS::UID::AutoCommit = 0;
   my $dbh = dbh;
 
+  foreach my $field ( 'first', 'last', 'company' ) {
+    my $queue = new FS::queue { 
+      'job' => 'FS::cust_main::Search::append_fuzzyfiles_fuzzyfield'
+    };
+    my @args = "cust_main.$field", $self->get($field);
+    my $error = $queue->insert( @args );
+    if ( $error ) {
+      $dbh->rollback if $oldAutoCommit;
+      return "queueing job (transaction rolled back): $error";
+    }
+  }
+
   my @locations = $self->bill_location;
   push @locations, $self->ship_location if $self->has_ship_address;
   foreach my $location (@locations) {
     my $queue = new FS::queue { 
-      'job' => 'FS::cust_main::Search::append_fuzzyfiles'
+      'job' => 'FS::cust_main::Search::append_fuzzyfiles_fuzzyfield'
     };
-    my @args = map $location->get($_), @FS::cust_main::Search::fuzzyfields;
+    my @args = 'cust_location.address1', $location->address1;
     my $error = $queue->insert( @args );
     if ( $error ) {
       $dbh->rollback if $oldAutoCommit;
@@ -1834,17 +1852,19 @@ sub check {
     $self->payby =~ /^(CARD|DCRD)$/ ) {
 
     my $payinfo = $self->payinfo;
-    $payinfo =~ s/\D//g;
-    $payinfo =~ /^(\d{13,16}|\d{8,9})$/
-      or return gettext('invalid_card'); # . ": ". $self->payinfo;
-    $payinfo = $1;
-    $self->payinfo($payinfo);
-    validate($payinfo)
-      or return gettext('invalid_card'); # . ": ". $self->payinfo;
+    if ($payinfo !~ /^card_token:./) {
+      $payinfo =~ s/\D//g;
+      $payinfo =~ /^(\d{13,16}|\d{8,9})$/
+        or return gettext('invalid_card'); # . ": ". $self->payinfo;
+      $payinfo = $1;
+      $self->payinfo($payinfo);
+      validate($payinfo)
+        or return gettext('invalid_card'); # . ": ". $self->payinfo;
 
-    return gettext('unknown_card_type')
-      if $self->payinfo !~ /^99\d{14}$/ #token
-      && cardtype($self->payinfo) eq "Unknown";
+      return gettext('unknown_card_type')
+        if $self->payinfo !~ /^99\d{14}$/ #token
+        && cardtype($self->payinfo) eq "Unknown";
+    }
 
     unless ( $ignore_banned_card ) {
       my $ban = FS::banned_pay->ban_search( %{ $self->_banned_pay_hashref } );

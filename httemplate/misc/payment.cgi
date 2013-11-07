@@ -29,7 +29,7 @@
 %
 %   my( $payinfo, $paycvv, $month, $year ) = ( '', '', '', '' );
 %   my $payname = $cust_main->first. ' '. $cust_main->getfield('last');
-%   if ( $cust_main->payby =~ /^(CARD|DCRD|TOKN)$/ ) {
+%   if ( $cust_main->payby =~ /^(CARD|DCRD)$/ ) {
 %     $payinfo = $cust_main->paymask;
 %     $paycvv = $cust_main->paycvv;
 %     ( $month, $year ) = $cust_main->paydate_monthyear;

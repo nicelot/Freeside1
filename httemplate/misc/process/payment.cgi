@@ -98,12 +98,9 @@ if ( $payby eq 'CHEK' ) {
 
   $payinfo = $cgi->param('payinfo');
   if ($payinfo eq $cust_main->paymask) {
-    if ($cust_main->payby eq 'TOKN') {
-      $payby = 'TOKN';
-    }
     $payinfo = $cust_main->payinfo;
   }
-  if ( $payby eq 'CARD' ) {
+  if ( $payby eq 'CARD' && $payinfo !~ /^card_token:./ ) {
     $payinfo =~ s/\D//g;
     $payinfo =~ /^(\d{13,16}|\d{8,9})$/
       or errorpage(gettext('invalid_card')); # . ": ". $self->payinfo;
@@ -196,17 +193,14 @@ if ( $cgi->param('batch') ) {
 
 if ( $cgi->param('save') ) {
   my $new = new FS::cust_main { $cust_main->hash };
-  if ( $payby eq 'CARD' && $cust_main->card_token ) { $payby = 'TOKN'; }
   if ( $payby eq 'CARD' ) { 
     $new->set( 'payby' => ( $cgi->param('auto') ? 'CARD' : 'DCRD' ) );
   } elsif ( $payby eq 'CHEK' ) {
     $new->set( 'payby' => ( $cgi->param('auto') ? 'CHEK' : 'DCHK' ) );
-  } elsif ( $payby eq 'TOKN' ) {
-    $new->set( 'payby' => 'TOKN' );
   } else {
     die "unknown payby $payby";
   }
-  $new->set( 'payinfo' => $cust_main->card_token || $payinfo );
+  $new->set( 'payinfo' => $cust_main->card_token ? 'card_token:'.$cust_main->card_token : $payinfo );
   $new->set( 'paydate' => "$year-$month-01" );
   $new->set( 'payname' => $payname );
 
