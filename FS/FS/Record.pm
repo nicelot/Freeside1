@@ -81,6 +81,7 @@ FS::UID->install_callback( sub {
     eval "sub PG_BYTEA { die 'guru meditation #9: calling PG_BYTEA when not running Pg?'; }";
   }
 
+  $cached = FS::UID::get_cached;
 } );
 
 =head1 NAME
