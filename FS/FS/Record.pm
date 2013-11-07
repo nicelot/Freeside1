@@ -386,10 +386,9 @@ sub qsearch {
     my $pkey = $dbdef_table->primary_key;
 
     ##TODO: if one table/keyed lookup, try cache...
-    my $cached_key = $stable . '::Object::' . $record->{$pkey};
-    my $cached_value;
     if( @stable == 1 && $cached && $record->{$pkey}){
-      $cached_value = $cached->get( $cached_key );
+      my $cached_key = $stable . '::Object::' . $record->{$pkey};
+      my $cached_value = $cached->get( $cached_key );
       if ($cached_value && ((ref $cached_value) =~ /^FS::/) ) {
         warn "FOUND CACHED VALUE - $cached_key" if $DEBUG > 2;
         return ($cached_value);
@@ -1309,7 +1308,7 @@ sub insert {
 
   if ($cached) {
       # clear the cache
-      my $cached_key = $table . '::Object::' . $primary_key;
+      my $cached_key = $table . '::Object::' . $self->$primary_key;
       warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
       $cached->set($cached_key , $self); ##TODO: time and failure case
   }
@@ -1384,7 +1383,7 @@ sub delete {
 
   if ($cached) {
       # clear the cache
-      my $cached_key = $self->table . '::Object::' . $primary_key;
+      my $cached_key = $self->table . '::Object::' . $self->$primary_key;
       warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
       $cached->delete($cached_key); ##TODO: time and failure case
   }
@@ -1532,7 +1531,7 @@ sub replace {
 
   if ($cached) {
       # clear the cache
-      my $cached_key = $new->table . '::Object::' . $primary_key;
+      my $cached_key = $new->table . '::Object::' . $new->$primary_key;
       warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
       $cached->set($cached_key , $new); ##TODO: time and failure case
   }
