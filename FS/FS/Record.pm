@@ -52,8 +52,8 @@ my $rsa_loaded;
 my $rsa_encrypt;
 my $rsa_decrypt;
 
-$conf = '';
-$conf_encryption = '';
+our $conf = '';
+our $conf_encryption = '';
 our $cached;
 
 FS::UID->install_callback( sub {
