@@ -1026,7 +1026,7 @@ sub uncancel {
     return $error;
   }
 
-  ##
+  #
   # insert services
   ##
 
@@ -1121,6 +1121,18 @@ sub uncancel {
     if ( $error ) {
       $dbh->rollback if $oldAutoCommit;
       return "canceling supplemental pkg#".$supp_pkg->pkgnum.": $error";
+    }
+  }
+
+  if ( $options{'reason'} ) {
+    $error = $self->insert_reason( 'reason' => $options{'reason'},
+                                   'action' => 'uncancel',
+                                   'date'   => $start,
+                                   'reason_otaker' => $options{'reason_otaker'},
+                                 );
+    if ( $error ) {
+      dbh->rollback if $oldAutoCommit;
+      return "Error inserting cust_pkg_reason: $error";
     }
   }
 
@@ -1520,6 +1532,18 @@ sub unsuspend {
     }
   
   } #if $date 
+
+  if ( $opt{'reason'} ) {
+    $error = $self->insert_reason( 'reason' => $opt{'reason'},
+                                   'action' => 'unsuspend',
+                                   'date'   => $date,
+                                   'reason_otaker' => $opt{'reason_otaker'},
+                                 );
+    if ( $error ) {
+      dbh->rollback if $oldAutoCommit;
+      return "Error inserting cust_pkg_reason: $error";
+    }
+  }
 
   my @labels = ();
 

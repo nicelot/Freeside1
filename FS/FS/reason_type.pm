@@ -10,12 +10,14 @@ our %class_name = (
   'C' => 'cancel',
   'R' => 'credit',
   'S' => 'suspend',
+  'U' => 'activate', #uncancel/unsuspend
 );
 
 our %class_purpose = (  
   'C' => 'explain why a customer package was cancelled',
   'R' => 'explain why a customer was credited',
   'S' => 'explain why a customer package was suspended',
+  'U' => 'explain why a customer package was unsuspended/uncanceled/activated',
 );
 
 =head1 NAME

@@ -97,7 +97,7 @@ and replace methods.
 sub check {
   my $self = shift;
 
-  my @actions = ( 'A', 'C', 'E', 'S' );
+  my @actions = ( 'A', 'C', 'E', 'S', 'U' ); # adjourn cancel expire suspend activate(unsuspend/uncancel)
   push @actions, '' if $ignore_empty_action;
 
   my $error = 
