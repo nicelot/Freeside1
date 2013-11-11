@@ -28,9 +28,9 @@ MASONDATA = ${FREESIDE_CACHE}/masondata
 DIST_CONF = ${FREESIDE_CONF}/default_conf
 
 #mod_perl v2 1.999_22 on Apache 2.0 through 2.3 (Debian ancient through 7.x)
-#APACHE_VERSION=2
+APACHE_VERSION=2
 #Apache 2.4 (Debian 8.x)
-APACHE_VERSION=2.4
+#APACHE_VERSION=2.4
 
 #deb
 #FREESIDE_DOCUMENT_ROOT = /var/www/freeside
@@ -126,7 +126,7 @@ RT_PATH = /opt/rt3
 #only used for dev kludge now, not a big deal
 FREESIDE_PATH = `pwd`
 #PERL_INC_DEV_KLUDGE = /usr/local/share/perl/5.14.2/
-PERL_INC_DEV_KLUDGE = /opt/rh/perl514/root/usr/local/share/perl5
+PERL_INC_DEV_KLUDGE = /opt/rh/perl516/root/usr/local/share/perl5
 
 VERSION := `grep '^$$VERSION' FS/FS.pm | cut -d\' -f2`
 TAG := freeside_`grep '^$$VERSION' FS/FS.pm | cut -d\' -f2 | perl -pe 's/\./_/g'`

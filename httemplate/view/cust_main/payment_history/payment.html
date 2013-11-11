@@ -165,7 +165,7 @@ if (    $cust_pay->closed !~ /^Y/i
 }
 
 my $void = '';
-my $voidmsg = $cust_pay->payby =~ /^(CARD|CHEK)$/
+my $voidmsg = $cust_pay->payby =~ /^(CARD|CHEK|TOKN)$/
               ? ' (' . emt('do not send anything to the payment gateway').')'
               : '';
 $void = areyousure_link("${p}misc/void-cust_pay.cgi?".$cust_pay->paynum,
@@ -174,7 +174,7 @@ $void = areyousure_link("${p}misc/void-cust_pay.cgi?".$cust_pay->paynum,
                         emt('void')
                        )
     if (    $cust_pay->closed !~ /^Y/i
-     && (    ( $cust_pay->payby eq 'CARD'
+     && (    ( $cust_pay->payby =~ m/CARD|TOKN/
                && $curuser->access_right('Credit card void')
              )
           || ( $cust_pay->payby eq 'CHEK'

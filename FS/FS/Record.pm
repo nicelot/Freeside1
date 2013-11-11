@@ -12,7 +12,7 @@ use File::Slurp qw( slurp );
 use File::CounterFile;
 use Text::CSV_XS;
 use DBI qw(:sql_types);
-use DBIx::DBSchema 0.42; #for foreign keys
+use DBIx::DBSchema 0.43; #0.43 for foreign keys
 use Locale::Country;
 use Locale::Currency;
 use NetAddr::IP; # for validation
@@ -23,6 +23,7 @@ use FS::SearchCache;
 use FS::Msgcat qw(gettext);
 use JSON qw(to_json);
 #use FS::Conf; #dependency loop bs, in install_callback below instead
+use Data::Dumper;
 
 use FS::part_virtual_field;
 
@@ -53,6 +54,8 @@ my $rsa_decrypt;
 
 our $conf = '';
 our $conf_encryption = '';
+our $cached;
+
 FS::UID->install_callback( sub {
 
   eval "use FS::Conf;";
@@ -73,6 +76,7 @@ FS::UID->install_callback( sub {
     eval "sub PG_BYTEA { die 'guru meditation #9: calling PG_BYTEA when not running Pg?'; }";
   }
 
+  $cached = FS::UID::get_cached;
 } );
 
 =head1 NAME
@@ -365,13 +369,6 @@ sub qsearch {
   foreach my $stable ( @stable ) {
     #stop altering the caller's hashref
     my $record      = { %{ shift(@record) || {} } };#and be liberal in receipt
-    my $select      = shift @select;
-    my $extra_sql   = shift @extra_sql;
-    my $extra_param = shift @extra_param;
-    my $order_by    = shift @order_by;
-    my $cache       = shift @cache;
-    my $addl_from   = shift @addl_from;
-    my $debug       = shift @debug;
 
     #$stable =~ /^([\w\_]+)$/ or die "Illegal table: $table";
     #for jsearch
@@ -383,6 +380,24 @@ sub qsearch {
       or die "No schema for table $table found - ".
              "do you need to run freeside-upgrade?";
     my $pkey = $dbdef_table->primary_key;
+
+    ##TODO: if one table/keyed lookup, try cache...
+    if( @stable == 1 && $cached && $record->{$pkey}){
+      my $cached_key = $stable . '::Object::' . $record->{$pkey};
+      my $cached_value = $cached->get( $cached_key );
+      if ($cached_value && ((ref $cached_value) =~ /^FS::/) ) {
+        warn "FOUND CACHED VALUE - $cached_key" if $DEBUG > 2;
+        return ($cached_value);
+      }
+    }
+
+    my $select      = shift @select;
+    my $extra_sql   = shift @extra_sql;
+    my $extra_param = shift @extra_param;
+    my $order_by    = shift @order_by;
+    my $cache       = shift @cache;
+    my $addl_from   = shift @addl_from;
+    my $debug       = shift @debug;
 
     my @real_fields = grep exists($record->{$_}), real_fields($table);
 
@@ -399,7 +414,6 @@ sub qsearch {
     push @statement, $statement;
 
     warn "[debug]$me $statement\n" if $DEBUG > 1 || $debug;
- 
 
     foreach my $field (
       grep defined( $record->{$_} ) && $record->{$_} ne '', @real_fields
@@ -499,25 +513,18 @@ sub qsearch {
       } values(%result);
     }
 
-    # Check for encrypted fields and decrypt them.
-   ## only in the local copy, not the cached object
-    if ( $conf_encryption 
-         && eval '@FS::'. $table . '::encrypted_fields' ) {
+    if ($cached) {
       foreach my $record (@return) {
-        foreach my $field (eval '@FS::'. $table . '::encrypted_fields') {
-          next if $field eq 'payinfo' 
-                    && ($record->isa('FS::payinfo_transaction_Mixin') 
-                        || $record->isa('FS::payinfo_Mixin') )
-                    && $record->payby
-                    && !grep { $record->payby eq $_ } @encrypt_payby;
-          # Set it directly... This may cause a problem in the future...
-          $record->setfield($field, $record->decrypt($record->getfield($field)));
-        }
+        # this must be cached before decrypting data
+        my $cached_key = $table . '::Object::' . $record->$pkey;
+        warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
+        $cached->set($cached_key , $record); ##TODO: time and failure case
       }
     }
   } else {
     cluck "warning: FS::$table not loaded; returning FS::Record objects"
       unless $nowarn_classload;
+    warn "[debug]$me WTF?\n" if $DEBUG> 1;
     @return = map {
       FS::Record->new( $table, { %{$_} } );
     } values(%result);
@@ -969,15 +976,29 @@ sub AUTOLOAD {
   my($self,$value)=@_;
   my($field)=$AUTOLOAD;
   $field =~ s/.*://;
+
   if ( defined($value) ) {
     confess "errant AUTOLOAD $field for $self (arg $value)"
       unless blessed($self) && $self->can('setfield');
-    $self->setfield($field,$value);
   } else {
     confess "errant AUTOLOAD $field for $self (no args)"
       unless blessed($self) && $self->can('getfield');
-    $self->getfield($field);
-  }    
+  }
+
+  # autoload is SLOW, lets push an actual sub in to make this 3x faster in future calls
+  no strict 'refs'; ## no critic
+  my $method = (ref $self).'::'.$field;
+  warn "[debug]$me creating autoload for $method\n" if $DEBUG > 1;
+  *$method = sub {
+      my ($self,$value) = @_;
+      if ( defined($value) ) {
+        $self->setfield($field,$value);
+      } else {
+        $self->getfield($field);
+      }
+  };
+
+  $self->$field($value);
 }
 
 # efficient
@@ -1281,11 +1302,16 @@ sub insert {
 
   dbh->commit or croak dbh->errstr if $FS::UID::AutoCommit;
 
-  # Now that it has been saved, reset the encrypted fields so that $new 
-  # can still be used.
-  foreach my $field (keys %{$saved}) {
-    $self->setfield($field, $saved->{$field});
+  if ($cached) {
+      # clear the cache
+      my $cached_key = $table . '::Object::' . $self->$primary_key;
+      warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
+      $cached->set($cached_key , $self); ##TODO: time and failure case
   }
+
+  # Now that it has been saved, reset the encrypted fields so that $new
+  # can still be used.
+  $self->{'decrypted'} = {} if $self->{'decrypted'};
 
   '';
 }
@@ -1350,6 +1376,13 @@ sub delete {
   $h_sth->execute or return $h_sth->errstr if $h_sth;
   
   dbh->commit or croak dbh->errstr if $FS::UID::AutoCommit;
+
+  if ($cached) {
+      # clear the cache
+      my $cached_key = $self->table . '::Object::' . $self->$primary_key;
+      warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
+      $cached->delete($cached_key); ##TODO: time and failure case
+  }
 
   #no need to needlessly destoy the data either (causes problems actually)
   #undef $self; #no need to keep object!
@@ -1492,11 +1525,16 @@ sub replace {
 
   dbh->commit or croak dbh->errstr if $FS::UID::AutoCommit;
 
-  # Now that it has been saved, reset the encrypted fields so that $new 
-  # can still be used.
-  foreach my $field (keys %{$saved}) {
-    $new->setfield($field, $saved->{$field});
+  if ($cached) {
+      # clear the cache
+      my $cached_key = $new->table . '::Object::' . $new->$primary_key;
+      warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
+      $cached->set($cached_key , $new); ##TODO: time and failure case
   }
+
+  # Now that it has been saved, reset the encrypted fields so that $new
+  # can still be used.
+  $new->{'decrypted'} = {} if $new->{'decrypted'};
 
   '';
 
@@ -1649,7 +1687,6 @@ files.  Currently only supports a single file named "file".
 =cut
 
 use Storable qw(thaw);
-use Data::Dumper;
 use MIME::Base64;
 sub process_batch_import {
   my($job, $opt) = ( shift, shift );
@@ -1749,7 +1786,6 @@ csv, xls, fixedlength, xml
 
 =cut
 
-use Data::Dumper;
 sub batch_import {
   my $param = shift;
 
@@ -3086,8 +3122,8 @@ sub loadRSA {
     }
 
     if (!$rsa_loaded) {
-	eval ("require $rsa_module"); # No need to import the namespace
-	$rsa_loaded++;
+      eval ("require $rsa_module"); # No need to import the namespace
+      $rsa_loaded++;
     }
     # Initialize Encryption
     if ($conf->exists('encryptionpublickey') && $conf->config('encryptionpublickey') ne '') {
