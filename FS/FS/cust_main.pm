@@ -2143,7 +2143,7 @@ on success or a list of errors.
 
 sub unsuspend {
   my $self = shift;
-  grep { $_->unsuspend } $self->suspended_pkgs;
+  grep { $_->unsuspend(@_) } $self->suspended_pkgs;
 }
 
 =item suspend
