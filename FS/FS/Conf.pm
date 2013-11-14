@@ -1756,6 +1756,21 @@ and customer address. Include units.',
   },
 
   {
+    'key'         => 'sip_passwordmin',
+    'section'     => 'telephony',
+    'description' => 'Minimum SIP password length (default 6)',
+    'type'        => 'text',
+  },
+
+  {
+    'key'         => 'sip_passwordmax',
+    'section'     => 'telephony',
+    'description' => 'Maximum SIP password length (default 8) (don\'t set this over 12 if you need to import or export crypt() passwords)',
+    'type'        => 'text',
+  },
+
+
+  {
     'key'         => 'password-noampersand',
     'section'     => 'password',
     'description' => 'Disallow ampersands in passwords',
@@ -2068,6 +2083,13 @@ and customer address. Include units.',
     'key'         => 'safe-part_bill_event',
     'section'     => 'UI',
     'description' => 'Validates invoice event expressions against a preset list.  Useful for webdemos, annoying to powerusers.',
+    'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'show_ship_company',
+    'section'     => 'UI',
+    'description' => 'Turns on display/collection of a "service company name" field for customers.',
     'type'        => 'checkbox',
   },
 
@@ -4788,6 +4810,17 @@ and customer address. Include units.',
     'section'     => 'self-service',
     'description' => 'Issue a warning if the same credit card is used for multiple signups within this many hours.',
     'type'        => 'text',
+  },
+
+  {
+    'key'         => 'svc_phone-radius-password',
+    'section'     => 'telephony',
+    'description' => 'Password when exporting svc_phone records to RADIUS',
+    'type'        => 'select',
+    'select_hash' => [
+      '' => 'Use default from svc_phone-radius-default_password config',
+      'countrycode_phonenum' => 'Phone number (with country code)',
+    ],
   },
 
   {
