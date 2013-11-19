@@ -1451,7 +1451,7 @@ sub replace {
                 && $new->payby
                 && !grep { $new->payby eq $_ } @encrypt_payby;
       $saved->{$field} = $new->getfield($field);
-      $new->{'decrypted'}->{$field} = 0 if $self->{'decrypted'}->{$field};
+      $new->{'decrypted'}->{$field} = 0 if $new->{'decrypted'}->{$field};
       $new->setfield($field, $new->encrypt($new->getfield($field)));
     }
   }
