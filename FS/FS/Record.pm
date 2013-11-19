@@ -384,7 +384,7 @@ sub qsearch {
 
     ##TODO: if one table/keyed lookup, try cache...
     if( @stable == 1 && $cached && $record->{$pkey}){
-      my $cached_key = $stable . '::Object::' . $record->{$pkey};
+      my $cached_key = $stable . '::'.$pkey.'::' . $record->{$pkey};
       my $cached_value = $cached->get( $cached_key );
       if ($cached_value && ((ref $cached_value) =~ /^FS::/) ) {
         warn "FOUND CACHED VALUE - $cached_key" if $DEBUG > 2;
@@ -517,7 +517,7 @@ sub qsearch {
     if ($cached) {
       foreach my $record (@return) {
         # this must be cached before decrypting data
-        my $cached_key = $table . '::Object::' . $record->$pkey;
+        my $cached_key = $table . '::'.$pkey.'::' . $record->$pkey;
         warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
         $cached->set($cached_key , $record); ##TODO: time and failure case
       }
@@ -1191,6 +1191,7 @@ sub insert {
                 && $self->payby
                 && !grep { $self->payby eq $_ } @encrypt_payby;
       $saved->{$field} = $self->getfield($field);
+      $self->{'decrypted'}->{$field} = 0 if $self->{'decrypted'}->{$field};
       $self->setfield($field, $self->encrypt($self->getfield($field)));
     }
   }
@@ -1305,7 +1306,7 @@ sub insert {
 
   if ($cached) {
       # clear the cache
-      my $cached_key = $table . '::Object::' . $self->$primary_key;
+      my $cached_key = $table . '::'.$primary_key.'::' . $self->$primary_key;
       warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
       $cached->set($cached_key , $self); ##TODO: time and failure case
   }
@@ -1380,7 +1381,7 @@ sub delete {
 
   if ($cached) {
       # clear the cache
-      my $cached_key = $self->table . '::Object::' . $self->$primary_key;
+      my $cached_key = $self->table . '::'.$primary_key.'::' . $self->$primary_key;
       warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
       $cached->delete($cached_key); ##TODO: time and failure case
   }
@@ -1446,6 +1447,7 @@ sub replace {
                 && $new->payby
                 && !grep { $new->payby eq $_ } @encrypt_payby;
       $saved->{$field} = $new->getfield($field);
+      $self->{'decrypted'}->{$field} = 0 if $self->{'decrypted'}->{$field};
       $new->setfield($field, $new->encrypt($new->getfield($field)));
     }
   }
@@ -1528,7 +1530,7 @@ sub replace {
 
   if ($cached) {
       # clear the cache
-      my $cached_key = $new->table . '::Object::' . $new->$primary_key;
+      my $cached_key = $new->table . '::'.$primary_key.'::' . $new->$primary_key;
       warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
       $cached->set($cached_key , $new); ##TODO: time and failure case
   }
