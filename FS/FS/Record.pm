@@ -2545,8 +2545,8 @@ sub ut_phonen {
     $phonen =~ s/\D//g;
     $phonen = $conf->config('cust_main-default_areacode').$phonen
       if length($phonen)==7 && $conf->config('cust_main-default_areacode');
-    # remove dialing and country code if supplied
-    $phonen =~ m/^1?(?:011|11)?(\d{3})(\d{3})(\d{4})(\d*)$/
+    # remove leading 1 (national dialing prefix) if supplied
+    $phonen =~ m/^1?(\d{3})(\d{3})(\d{4})(\d*)$/
       or return gettext('illegal_phone'). " $field: ". $self->getfield($field);
     $phonen = "$1-$2-$3";
     $phonen .= " x$4" if $4;
