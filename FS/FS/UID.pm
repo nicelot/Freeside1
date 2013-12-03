@@ -179,6 +179,10 @@ sub callback_setup {
 
 sub myconnect {
   my $options = shift || {};
+  unless (ref $options) {
+      # Handle being passed a username
+      $options = { user => $options };
+  }
   my $handle = DBI->connect( getsecrets($options), 
     { 'AutoCommit'         => 0,
       'ChopBlanks'         => 1,
