@@ -19,8 +19,12 @@ use FS::payinfo_Mixin;
 $DEBUG = 0;
 $me = '[FS::cust_main::Search]';
 
-@fuzzyfields = ( 'cust_main.first', 'cust_main.last', 'cust_main.company', 
-  'cust_location.address1' );
+@fuzzyfields = (
+  'cust_main.first', 'cust_main.last', 'cust_main.company', 
+  'cust_main.ship_company', # if you're using it
+  'cust_location.address1',
+  'contact.first',   'contact.last',
+);
 
 install_callback FS::UID sub { 
   $conf = new FS::Conf;
@@ -72,6 +76,7 @@ sub smart_search {
   #here is the agent virtualization
   my $agentnums_sql = 
     $FS::CurrentUser::CurrentUser->agentnums_sql(table => 'cust_main');
+  my $agentnums_href = $FS::CurrentUser::CurrentUser->agentnums_href;
 
   my @cust_main = ();
 
@@ -85,6 +90,10 @@ sub smart_search {
     my $phonen = "$1-$2-$3";
     $phonen .= " x$4" if $4;
 
+    my $phonenum = "$1$2$3";
+    #my $extension = $4;
+
+    #cust_main phone numbers
     push @cust_main, qsearch( {
       'table'   => 'cust_main',
       'hashref' => { %options },
@@ -96,6 +105,16 @@ sub smart_search {
                      ' ) '.
                      " AND $agentnums_sql", #agent virtualization
     } );
+
+    #contact phone numbers
+    push @cust_main,
+      grep $agentnums_href->{$_->agentnum}, #agent virt
+        grep $_, #skip contacts that don't have cust_main records
+          map $_->contact->cust_main,
+            qsearch({
+                      'table'   => 'contact_phone',
+                      'hashref' => { 'phonenum' => $phonenum },
+                   });
 
     unless ( @cust_main || $phonen =~ /x\d+$/ ) { #no exact match
       #try looking for matches with extensions unless one was specified
@@ -117,12 +136,26 @@ sub smart_search {
   } 
   
   
-  if ( $search =~ /@/ ) { #invoicing email address
+  if ( $search =~ /@/ ) { #email address
+
+      # invoicing email address
       push @cust_main,
+        grep $agentnums_href->{$_->agentnum}, #agent virt
 	  map $_->cust_main,
 	      qsearch( {
 			 'table'     => 'cust_main_invoice',
 			 'hashref'   => { 'dest' => $search },
+		       }
+		     );
+
+      # contact email address
+      push @cust_main,
+        grep $agentnums_href->{$_->agentnum}, #agent virt
+          grep $_, #skip contacts that don't have cust_main records
+	    map $_->contact->cust_main,
+	      qsearch( {
+			 'table'     => 'contact_email',
+			 'hashref'   => { 'emailaddress' => $search },
 		       }
 		     );
 
@@ -159,7 +192,7 @@ sub smart_search {
     # for all agents this user can see, if any of them have custnum prefixes 
     # that match the search string, include customers that match the rest 
     # of the custnum and belong to that agent
-    foreach my $agentnum ( $FS::CurrentUser::CurrentUser->agentnums ) {
+    foreach my $agentnum ( keys %$agentnums_href ) {
       my $p = $conf->config('cust_main-custnum-display_prefix', $agentnum);
       next if !$p;
       if ( $p eq substr($num, 0, length($p)) ) {
@@ -216,10 +249,12 @@ sub smart_search {
           $agentnums_sql,
         ),
       } ),
+
     #contacts?
+    # probably not necessary for the "something a browser remembered" case
 
   } elsif ( $search =~ /^\s*(\S.*\S)\s*$/ ) { # value search
-                                              # try (ship_){last,company}
+                                              # try {first,last,company}
 
     my $value = lc($1);
 
@@ -256,12 +291,25 @@ sub smart_search {
       my $sql = scalar(keys %options) ? ' AND ' : ' WHERE ';
       $sql .= "( LOWER(cust_main.last) = $q_last AND LOWER(cust_main.first) = $q_first )";
 
+      #cust_main
       push @cust_main, qsearch( {
         'table'     => 'cust_main',
         'hashref'   => \%options,
         'extra_sql' => "$sql AND $agentnums_sql", #agent virtualization
       } );
-      #contacts?
+
+      #contacts
+      push @cust_main,
+        grep $agentnums_href->{$_->agentnum}, #agent virt
+          grep $_, #skip contacts that don't have cust_main records
+	    map $_->cust_main,
+	      qsearch( {
+			 'table'     => 'contact',
+			 'hashref'   => { 'first' => $first,
+                                          'last'  => $last,
+                                        }, 
+		       }
+		     );
 
       # or it just be something that was typed in... (try that in a sec)
 
@@ -271,18 +319,29 @@ sub smart_search {
 
     #exact
     my $sql = scalar(keys %options) ? ' AND ' : ' WHERE ';
-    $sql .= " (    LOWER(last)          = $q_value
-                OR LOWER(company)       = $q_value
+    $sql .= " (    LOWER(cust_main.first)         = $q_value
+                OR LOWER(cust_main.last)          = $q_value
+                OR LOWER(cust_main.company)       = $q_value
+                OR LOWER(cust_main.ship_company)  = $q_value
             ";
-    #yes, it's a kludge
-    $sql .= "   OR EXISTS( 
-                SELECT 1 FROM cust_location 
-                WHERE LOWER(cust_location.address1) = $q_value
-                  AND cust_location.custnum = cust_main.custnum
-            )
-            "
+
+    #address1 (yes, it's a kludge)
+    $sql .= "   OR EXISTS ( 
+                            SELECT 1 FROM cust_location 
+                              WHERE LOWER(cust_location.address1) = $q_value
+                                AND cust_location.custnum = cust_main.custnum
+                          )"
       if $conf->exists('address1-search');
-    $sql .= " )";
+
+    #contacts (look, another kludge)
+    $sql .= "   OR EXISTS ( SELECT 1 FROM contact
+                              WHERE (    LOWER(contact.first) = $q_value
+                                      OR LOWER(contact.last)  = $q_value
+                                    )
+                                AND contact.custnum IS NOT NULL
+                                AND contact.custnum = cust_main.custnum
+                          )
+              ) ";
 
     push @cust_main, qsearch( {
       'table'     => 'cust_main',
@@ -299,27 +358,30 @@ sub smart_search {
 
       #substring
 
-      my @hashrefs = (
+      my @company_hashrefs = (
         { 'company'      => { op=>'ILIKE', value=>"%$value%" }, },
+        { 'ship_company' => { op=>'ILIKE', value=>"%$value%" }, },
       );
 
-      if ( $first && $last ) {
-        #contacts? ship_first/ship_last are gone
+      my @hashrefs = ();
 
-        push @hashrefs,
+      if ( $first && $last ) {
+
+        @hashrefs = (
           { 'first'        => { op=>'ILIKE', value=>"%$first%" },
             'last'         => { op=>'ILIKE', value=>"%$last%" },
           },
-        ;
+        );
 
       } else {
 
-        push @hashrefs,
+        @hashrefs = (
+          { 'first'        => { op=>'ILIKE', value=>"%$value%" }, },
           { 'last'         => { op=>'ILIKE', value=>"%$value%" }, },
-        ;
+        );
       }
 
-      foreach my $hashref ( @hashrefs ) {
+      foreach my $hashref ( @company_hashrefs, @hashrefs ) {
 
         push @cust_main, qsearch( {
           'table'     => 'cust_main',
@@ -334,11 +396,30 @@ sub smart_search {
       if ( $conf->exists('address1-search') ) {
 
         push @cust_main, qsearch( {
-          'table'     => 'cust_main',
-          'addl_from' => 'JOIN cust_location USING (custnum)',
-          'extra_sql' => 'WHERE cust_location.address1 ILIKE '.
-                          dbh->quote("%$value%"),
+          table     => 'cust_main',
+          addl_from => 'JOIN cust_location USING (custnum)',
+          extra_sql => 'WHERE '.
+                        ' cust_location.address1 ILIKE '.dbh->quote("%$value%").
+                        " AND $agentnums_sql", #agent virtualizaiton
         } );
+
+      }
+
+      #contact substring
+
+      foreach my $hashref ( @hashrefs ) {
+
+        push @cust_main,
+          grep $agentnums_href->{$_->agentnum}, #agent virt
+            grep $_, #skip contacts that don't have cust_main records
+	      map $_->cust_main,
+                qsearch({
+                          'table'     => 'contact',
+                          'hashref'   => { %$hashref,
+                                           #%options,
+                                         },
+                          #'extra_sql' => " AND $agentnums_sql", #agent virt
+                       });
 
       }
 
@@ -355,15 +436,30 @@ sub smart_search {
             'first'  => $first }, #
           %fuzopts
         );
+        push @cust_main, FS::cust_main::Search->fuzzy_search(
+          { 'contact.last'   => $last,    #fuzzy hashref
+            'contact.first'  => $first }, #
+          %fuzopts
+        );
+     }
+      foreach my $field ( 'first', 'last', 'company', 'ship_company' ) {
+        push @cust_main, FS::cust_main::Search->fuzzy_search(
+          { $field => $value },
+          %fuzopts
+        );
       }
-      foreach my $field ( 'last', 'company' ) {
-        push @cust_main,
-          FS::cust_main::Search->fuzzy_search( { $field => $value }, %fuzopts );
+      foreach my $field ( 'first', 'last' ) {
+        push @cust_main, FS::cust_main::Search->fuzzy_search(
+          { "contact.$field" => $value },
+          %fuzopts
+        );
       }
       if ( $conf->exists('address1-search') ) {
         push @cust_main,
           FS::cust_main::Search->fuzzy_search(
-            { 'cust_location.address1' => $value }, %fuzopts );
+            { 'cust_location.address1' => $value },
+            %fuzopts
+        );
       }
 
     }
@@ -610,14 +706,24 @@ sub search {
   ##
   # address
   ##
-  if ( $params->{'address'} =~ /\S/ ) {
-    my $address = dbh->quote('%'. lc($params->{'address'}). '%');
-    push @where, "EXISTS(
-      SELECT 1 FROM cust_location 
-      WHERE cust_location.custnum = cust_main.custnum
-        AND (LOWER(cust_location.address1) LIKE $address OR
-             LOWER(cust_location.address2) LIKE $address)
-    )";
+  if ( $params->{'address'} ) {
+    # allow this to be an arrayref
+    my @values = ($params->{'address'});
+    @values = @{$values[0]} if ref($values[0]);
+    my @orwhere;
+    foreach (grep /\S/, @values) {
+      my $address = dbh->quote('%'. lc($_). '%');
+      push @orwhere,
+        "LOWER(cust_location.address1) LIKE $address",
+        "LOWER(cust_location.address2) LIKE $address";
+    }
+    if (@orwhere) {
+      push @where, "EXISTS(
+        SELECT 1 FROM cust_location 
+        WHERE cust_location.custnum = cust_main.custnum
+          AND (".join(' OR ',@orwhere).")
+        )";
+    }
   }
 
   ##
@@ -656,22 +762,6 @@ sub search {
 
   $pkgwhere .= "AND (cancel = 0 or cancel is null)"
     unless $params->{'cancelled_pkgs'};
-
-  ##
-  # parse without census tract checkbox
-  ##
-
-  push @where, "(ship_location.censustract = '' or ship_location.censustract is null)"
-    if $params->{'no_censustract'};
-
-  ##
-  # parse with hardcoded tax location checkbox
-  ##
-
-  my $tax_prefix = FS::Conf->new->exists('tax-ship_location') ? 'ship_' 
-                                                              : 'bill_';
-  push @where, "${tax_prefix}location.geocode is not null"
-    if $params->{'with_geocode'};
 
   ##
   # "with email address(es)" checkbox
@@ -921,6 +1011,7 @@ sub search {
 
     my $header_query = "
       SELECT COUNT(cust_pkg.custnum = cust_main.custnum) AS count
+
         FROM cust_main $addl_from $extra_sql $pkgwhere
           GROUP BY cust_main.custnum ORDER BY count DESC LIMIT 1
     ";
@@ -940,19 +1031,6 @@ sub search {
 
   }
 
-  if ( $params->{'with_geocode'} ) {
-
-    unshift @extra_headers, 'Tax location override', 'Calculated tax location';
-    unshift @extra_fields, sub { my $c = shift; $c->get('geocode'); },
-                           sub { my $c = shift;
-                                 $c->set('geocode', '');
-                                 $c->geocode('cch'); #XXX only cch right now
-                               };
-    push @select, 'geocode';
-    push @select, 'zip' unless grep { $_ eq 'zip' } @select;
-    push @select, 'ship_zip' unless grep { $_ eq 'ship_zip' } @select;
-  }
-
   my $select = join(', ', @select);
 
   my $sql_query = {
@@ -966,7 +1044,7 @@ sub search {
     'extra_headers' => \@extra_headers,
     'extra_fields'  => \@extra_fields,
   };
-  warn Data::Dumper::Dumper($sql_query);
+  #warn Data::Dumper::Dumper($sql_query);
   $sql_query;
 
 }
@@ -975,7 +1053,15 @@ sub search {
 
 Performs a fuzzy (approximate) search and returns the matching FS::cust_main
 records.  Currently, I<first>, I<last>, I<company> and/or I<address1> may be
-specified.
+specified. 
+
+Depending on the value of the C<fuzzy-method> config value, this subroutine 
+will use a different approach. If the value is I<String::Approx>,
+Freeside legacy behavior will ensue and the search will be done against
+plain text files using the L<String::Approx> module. If the value is 
+I<PG levenstein>, the search will employ the fuzzystrmatch PostgreSQL 
+extension to do the search. If the value is I<pg_trgm>, the search will
+employ the pg_trgm PostgreSQL extension to do a trigram match search.
 
 Depending on the value of the C<fuzzy-method> config value, this subroutine 
 will use a different approach. If the value is I<String::Approx>,
@@ -1123,7 +1209,14 @@ sub fuzzy_search {
 
 sub check_and_rebuild_fuzzyfiles {
   my $dir = $FS::UID::conf_dir. "/cache.". $FS::UID::datasrc;
-  rebuild_fuzzyfiles() if grep { ! -e "$dir/cust_main.$_" } @fuzzyfields;
+  rebuild_fuzzyfiles()
+    if grep { ! -e "$dir/$_" }
+         map {
+               my ($field, $table) = reverse split('\.', $_);
+               $table ||= 'cust_main';
+               "$table.$field"
+             }
+           @fuzzyfields;
 }
 
 =item rebuild_fuzzyfiles
@@ -1176,34 +1269,48 @@ sub append_fuzzyfiles {
 
   check_and_rebuild_fuzzyfiles();
 
-  use Fcntl qw(:flock);
+  #foreach my $fuzzy (@fuzzyfields) {
+  foreach my $fuzzy ( 'cust_main.first', 'cust_main.last', 'cust_main.company', 
+                      'cust_location.address1',
+                      'cust_main.ship_company',
+                    ) {
 
-  my $dir = $FS::UID::conf_dir. "/cache.". $FS::UID::datasrc;
-
-  foreach my $fuzzy (@fuzzyfields) {
-
-    my ($field, $table) = reverse split('\.', $fuzzy);
-    $table ||= 'cust_main';
-
-    my $value = shift;
-
-    if ( $value ) {
-
-      open(CACHE, '>>:encoding(UTF-8)', "$dir/$table.$field" )
-        or die "can't open $dir/$table.$field: $!";
-      flock(CACHE,LOCK_EX)
-        or die "can't lock $dir/$table.$field: $!";
-
-      print CACHE "$value\n";
-
-      flock(CACHE,LOCK_UN)
-        or die "can't unlock $dir/$table.$field: $!";
-      close CACHE;
-    }
+    append_fuzzyfiles_fuzzyfield($fuzzy, shift);
 
   }
 
   1;
+}
+
+=item append_fuzzyfiles_fuzzyfield COLUMN VALUE
+
+=item append_fuzzyfiles_fuzzyfield TABLE.COLUMN VALUE
+
+=cut
+
+use Fcntl qw(:flock);
+sub append_fuzzyfiles_fuzzyfield {
+  my( $fuzzyfield, $value ) = @_;
+
+  my $dir = $FS::UID::conf_dir. "/cache.". $FS::UID::datasrc;
+
+
+  my ($field, $table) = reverse split('\.', $fuzzyfield);
+  $table ||= 'cust_main';
+
+  return unless length($value);
+
+  open(CACHE, '>>:encoding(UTF-8)', "$dir/$table.$field" )
+    or die "can't open $dir/$table.$field: $!";
+  flock(CACHE,LOCK_EX)
+    or die "can't lock $dir/$table.$field: $!";
+
+  print CACHE "$value\n";
+
+  flock(CACHE,LOCK_UN)
+    or die "can't unlock $dir/$table.$field: $!";
+  close CACHE;
+
 }
 
 =item all_X

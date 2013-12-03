@@ -45,7 +45,7 @@
   <TD BGCOLOR="#ffffff">
 % if ( $cust_main->payby eq 'CARD' || $cust_main->payby eq 'DCRD' ) { 
 
-%   my $autodemand = $cust_main->payby eq 'CARD' ? 'automatic' : 'on-demand';
+%   my $autodemand = ($cust_main->payby eq 'CARD') ? 'automatic' : 'on-demand';
     <% mt("Credit card ([_1])",$autodemand) |h %>
   </TD>
 </TR>
@@ -221,7 +221,10 @@
 % if ( $conf->exists('enable_taxproducts') ) {
 <TR>
   <TD ALIGN="right"><% mt('Tax location') |h %></TD>
-  <TD BGCOLOR="#ffffff"><% $cust_main->geocode('cch') %></TD>
+% my $tax_location = $conf->exists('tax-ship_address')
+%                    ? $cust_main->ship_location
+%                    : $cust_main->bill_location;
+  <TD BGCOLOR="#ffffff"><% $tax_location->geocode('cch') %></TD>
 </TR>
 % }
 <TR>

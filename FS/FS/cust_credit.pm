@@ -21,6 +21,8 @@ use FS::reason;
 use FS::cust_event;
 use FS::agent;
 use FS::sales;
+use FS::cust_credit_void;
+use FS::upgrade_journal;
 
 $me = '[ FS::cust_credit ]';
 $DEBUG = 0;
@@ -203,6 +205,8 @@ the void method instead to leave a record of the deleted credit.
 # very similar to FS::cust_pay::delete
 sub delete {
   my $self = shift;
+  my %opt = @_;
+
   return "Can't delete closed credit" if $self->closed =~ /^Y/i;
 
   local $SIG{HUP} = 'IGNORE';
@@ -238,7 +242,7 @@ sub delete {
     return $error;
   }
 
-  if ( $conf->config('deletecredits') ne '' ) {
+  if ( !$opt{void} and $conf->config('deletecredits') ne '' ) {
 
     my $cust_main = $self->cust_main;
 
@@ -334,6 +338,53 @@ sub check {
   $self->_date(time) unless $self->_date;
 
   $self->SUPER::check;
+}
+
+=item void [ REASON ]
+
+Voids this credit: deletes the credit and all associated applications and 
+adds a record of the voided credit to the cust_credit_void table.
+
+=cut
+
+# yes, false laziness with cust_pay and cust_bill
+# but frankly I don't have time to fix it now
+
+sub void {
+  my $self = shift;
+  my $reason = shift;
+
+  local $SIG{HUP} = 'IGNORE';
+  local $SIG{INT} = 'IGNORE';
+  local $SIG{QUIT} = 'IGNORE';
+  local $SIG{TERM} = 'IGNORE';
+  local $SIG{TSTP} = 'IGNORE';
+  local $SIG{PIPE} = 'IGNORE';
+
+  my $oldAutoCommit = $FS::UID::AutoCommit;
+  local $FS::UID::AutoCommit = 0;
+  my $dbh = dbh;
+
+  my $cust_credit_void = new FS::cust_credit_void ( {
+      map { $_ => $self->get($_) } $self->fields
+    } );
+  $cust_credit_void->set('void_reason', $reason);
+  my $error = $cust_credit_void->insert;
+  if ( $error ) {
+    $dbh->rollback if $oldAutoCommit;
+    return $error;
+  }
+
+  $error = $self->delete(void => 1); # suppress deletecredits warning
+  if ( $error ) {
+    $dbh->rollback if $oldAutoCommit;
+    return $error;
+  }
+
+  $dbh->commit or die $dbh->errstr if $oldAutoCommit;
+
+  '';
+
 }
 
 =item cust_credit_refund
@@ -570,6 +621,100 @@ sub _upgrade_data {  # class method
   local($ignore_empty_reasonnum) = 1;
   $class->_upgrade_otaker(%opts);
 
+  if ( !FS::upgrade_journal->is_done('cust_credit__tax_link')
+      and !$conf->exists('enable_taxproducts') ) {
+    # RT#25458: fix credit line item applications that should refer to a 
+    # specific tax allocation
+    my @cust_credit_bill_pkg = qsearch({
+        table     => 'cust_credit_bill_pkg',
+        select    => 'cust_credit_bill_pkg.*',
+        addl_from => ' LEFT JOIN cust_bill_pkg USING (billpkgnum)',
+        extra_sql =>
+          'WHERE cust_credit_bill_pkg.billpkgtaxlocationnum IS NULL '.
+          'AND cust_bill_pkg.pkgnum = 0', # is a tax
+    });
+    my %tax_items;
+    my %credits;
+    foreach (@cust_credit_bill_pkg) {
+      my $billpkgnum = $_->billpkgnum;
+      $tax_items{$billpkgnum} ||= FS::cust_bill_pkg->by_key($billpkgnum);
+      $credits{$billpkgnum} ||= [];
+      push @{ $credits{$billpkgnum} }, $_;
+    }
+    TAX_ITEM: foreach my $tax_item (values %tax_items) {
+      my $billpkgnum = $tax_item->billpkgnum;
+      # get all pkg/location/taxrate allocations of this tax line item
+      my @allocations = sort {$b->amount <=> $a->amount}
+                        qsearch('cust_bill_pkg_tax_location', {
+                            billpkgnum => $billpkgnum
+                        });
+      # and these are all credit applications to it
+      my @credits = sort {$b->amount <=> $a->amount}
+                    @{ $credits{$billpkgnum} };
+      my $c = shift @credits;
+      my $a = shift @allocations; # we will NOT modify these
+      while ($c and $a) {
+        if ( abs($c->amount - $a->amount) < 0.005 ) {
+          # by far the most common case: the tax line item is for a single
+          # tax, so we just fill in the billpkgtaxlocationnum
+          $c->set('billpkgtaxlocationnum', $a->billpkgtaxlocationnum);
+          my $error = $c->replace;
+          if ($error) {
+            warn "error fixing credit application to tax item #$billpkgnum:\n$error\n";
+            next TAX_ITEM;
+          }
+          $c = shift @credits;
+          $a = shift @allocations;
+        } elsif ( $c->amount > $a->amount ) {
+          # fairly common: the tax line contains tax for multiple packages
+          # (or multiple taxes) but the credit isn't divided up
+          my $new_link = FS::cust_credit_bill_pkg->new({
+              creditbillnum         => $c->creditbillnum,
+              billpkgnum            => $c->billpkgnum,
+              billpkgtaxlocationnum => $a->billpkgtaxlocationnum,
+              amount                => $a->amount,
+              setuprecur            => 'setup',
+          });
+          my $error = $new_link->insert;
+          if ($error) {
+            warn "error fixing credit application to tax item #$billpkgnum:\n$error\n";
+            next TAX_ITEM;
+          }
+          $c->set(amount => sprintf('%.2f', $c->amount - $a->amount));
+          $a = shift @allocations;
+        } elsif ( $c->amount < 0.005 ) {
+          # also fairly common; we can delete these with no harm
+          my $error = $c->delete;
+          warn "error removing zero-amount credit application (probably harmless):\n$error\n" if $error;
+          $c = shift @credits;
+        } elsif ( $c->amount < $a->amount ) {
+          # should never happen, but if it does, handle it gracefully
+          $c->set('billpkgtaxlocationnum', $a->billpkgtaxlocationnum);
+          my $error = $c->replace;
+          if ($error) {
+            warn "error fixing credit application to tax item #$billpkgnum:\n$error\n";
+            next TAX_ITEM;
+          }
+          $a->set(amount => $a->amount - $c->amount);
+          $c = shift @credits;
+        }
+      } # while $c and $a
+      if ( $c ) {
+        if ( $c->amount < 0.005 ) {
+          my $error = $c->delete;
+          warn "error removing zero-amount credit application (probably harmless):\n$error\n" if $error;
+        } elsif ( $c->modified ) {
+          # then we've allocated part of it, so reduce the nonspecific 
+          # application by that much
+          my $error = $c->replace;
+          warn "error fixing credit application to tax item #$billpkgnum:\n$error\n" if $error;
+        }
+        # else there are probably no allocations, i.e. this is a pre-3.x 
+        # record that was never migrated over, so leave it alone
+      } # if $c
+    } # foreach $tax_item
+    FS::upgrade_journal->set_done('cust_credit__tax_link');
+  }
 }
 
 =back
@@ -852,7 +997,7 @@ sub credit_lineitems {
       {
         # the existing tax_Xlocation object
         my $old_loc =
-          $tax_links{$tax_item->billpkgnum}{$new_loc->taxable_billpkgnum};
+          $tax_links{$tax_item->billpkgnum}{$new_loc->taxable_cust_bill_pkg->billpkgnum};
 
         next if !$old_loc; # apply the leftover amount nonspecifically
 

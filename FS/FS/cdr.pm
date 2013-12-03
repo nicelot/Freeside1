@@ -92,6 +92,8 @@ following fields are currently supported:
 
 =item dst_ip_addr - Destination IP address (same)
 
+=item dst_term - Terminating destination number (if different from dst)
+
 =item startdate - Start of call (UNIX-style integer timestamp)
 
 =item answerdate - Answer time of call (UNIX-style integer timestamp)
@@ -194,6 +196,7 @@ sub table_info {
         #'lastdata'              => '',
         'src_ip_addr'           => 'Source IP',
         'dst_ip_addr'           => 'Dest. IP',
+        'dst_term'              => 'Termination dest.',
         'startdate'             => 'Start date',
         'answerdate'            => 'Answer date',
         'enddate'               => 'End date',
@@ -901,7 +904,7 @@ sub rate_prefix {
       #${$opt{region_group_included_min}} -= $minutes 
       #    if $region_group && $rate_detail->region_group;
 
-      if ( $included_min->{$regionnum}{$ratetimenum} > $minutes ) {
+      if ( $included_min->{$regionnum}{$ratetimenum} >= $minutes ) {
         $charge_sec = 0;
         $included_min->{$regionnum}{$ratetimenum} -= $minutes;
       } else {

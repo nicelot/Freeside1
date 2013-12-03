@@ -18,7 +18,7 @@ sub cust_location {
 
 =item cust_location_or_main
 
-If this package is associated with a location, returns the locaiton (see
+If this package is associated with a location, returns the location (see
 L<FS::cust_location>), otherwise returns the customer (see L<FS::cust_main>).
 
 =cut

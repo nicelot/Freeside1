@@ -17,6 +17,7 @@ use vars qw( $DEBUG $me $conf
              @encrypted_fields
              $import
              $ignore_expired_card $ignore_banned_card $ignore_illegal_zip
+             $ignore_invalid_card
              $skip_fuzzyfiles
              @paytypes
            );
@@ -89,6 +90,7 @@ $me = '[FS::cust_main]';
 $import = 0;
 $ignore_expired_card = 0;
 $ignore_banned_card = 0;
+$ignore_invalid_card = 0;
 
 $skip_fuzzyfiles = 0;
 
@@ -102,6 +104,7 @@ sub nohistory_fields { ('payinfo', 'paycvv'); }
 install_callback FS::UID sub { 
   $conf = new FS::Conf;
   #yes, need it for stuff below (prolly should be cached)
+  $ignore_invalid_card = $conf->exists('allow_invalid_cards');
 };
 
 sub _cache {
@@ -363,6 +366,9 @@ sub insert {
   local $SIG{TERM} = 'IGNORE';
   local $SIG{TSTP} = 'IGNORE';
   local $SIG{PIPE} = 'IGNORE';
+
+  # we do not need to encrypt tokens. and it's easier to show auditors your using tokens if they are not encrypted
+  local @encrypted_fields = grep( $_ ne 'payinfo', @encrypted_fields ) if $self->payinfo =~ /^card_token:./;
 
   my $oldAutoCommit = $FS::UID::AutoCommit;
   local $FS::UID::AutoCommit = 0;
@@ -1240,13 +1246,14 @@ sub merge {
   }
 
   tie my %financial_tables, 'Tie::IxHash',
-    'cust_bill'      => 'invoices',
-    'cust_bill_void' => 'voided invoices',
-    'cust_statement' => 'statements',
-    'cust_credit'    => 'credits',
-    'cust_pay'       => 'payments',
-    'cust_pay_void'  => 'voided payments',
-    'cust_refund'    => 'refunds',
+    'cust_bill'         => 'invoices',
+    'cust_bill_void'    => 'voided invoices',
+    'cust_statement'    => 'statements',
+    'cust_credit'       => 'credits',
+    'cust_credit_void'  => 'voided credits',
+    'cust_pay'          => 'payments',
+    'cust_pay_void'     => 'voided payments',
+    'cust_refund'       => 'refunds',
   ;
    
   foreach my $table ( keys %financial_tables ) {
@@ -1442,6 +1449,9 @@ sub replace {
   {
     return "You are not permitted to create complimentary accounts.";
   }
+
+  # we do not need to encrypt tokens. and it's easier to show auditors your using tokens if they are not encrypted
+  local @encrypted_fields = grep( $_ ne 'payinfo', @encrypted_fields ) if $self->payinfo =~ /^card_token:./;
 
   local($ignore_expired_card) = 1
     if $old->payby  =~ /^(CARD|DCRD)$/
@@ -1660,13 +1670,25 @@ sub queue_fuzzyfiles_update {
   local $FS::UID::AutoCommit = 0;
   my $dbh = dbh;
 
+  foreach my $field ( 'first', 'last', 'company', 'ship_company' ) {
+    my $queue = new FS::queue { 
+      'job' => 'FS::cust_main::Search::append_fuzzyfiles_fuzzyfield'
+    };
+    my @args = "cust_main.$field", $self->get($field);
+    my $error = $queue->insert( @args );
+    if ( $error ) {
+      $dbh->rollback if $oldAutoCommit;
+      return "queueing job (transaction rolled back): $error";
+    }
+  }
+
   my @locations = $self->bill_location;
   push @locations, $self->ship_location if $self->has_ship_address;
   foreach my $location (@locations) {
     my $queue = new FS::queue { 
-      'job' => 'FS::cust_main::Search::append_fuzzyfiles'
+      'job' => 'FS::cust_main::Search::append_fuzzyfiles_fuzzyfield'
     };
-    my @args = map $location->get($_), @FS::cust_main::Search::fuzzyfields;
+    my @args = 'cust_location.address1', $location->address1;
     my $error = $queue->insert( @args );
     if ( $error ) {
       $dbh->rollback if $oldAutoCommit;
@@ -1710,6 +1732,7 @@ sub check {
     || $self->ut_snumbern('spouse_birthdate')
     || $self->ut_snumbern('anniversary_date')
     || $self->ut_textn('company')
+    || $self->ut_textn('ship_company')
     || $self->ut_anything('comments')
     || $self->ut_numbern('referral_custnum')
     || $self->ut_textn('stateid')
@@ -1727,11 +1750,13 @@ sub check {
     || $self->ut_currencyn('currency')
   ;
 
-  my $company = $self->company;
-  $company =~ s/^\s+//; 
-  $company =~ s/\s+$//; 
-  $company =~ s/\s+/ /g;
-  $self->company($company);
+  foreach (qw(company ship_company)) {
+    my $company = $self->get($_);
+    $company =~ s/^\s+//; 
+    $company =~ s/\s+$//; 
+    $company =~ s/\s+/ /g;
+    $self->set($_, $company);
+  }
 
   #barf.  need message catalogs.  i18n.  etc.
   $error .= "Please select an advertising source."
@@ -1828,20 +1853,23 @@ sub check {
 
   # Need some kind of global flag to accept invalid cards, for testing
   # on scrubbed data.
-  if ( !$import && $check_payinfo && $self->payby =~ /^(CARD|DCRD)$/ ) {
+  if ( !$import && !$ignore_invalid_card && $check_payinfo && 
+    $self->payby =~ /^(CARD|DCRD)$/ ) {
 
     my $payinfo = $self->payinfo;
-    $payinfo =~ s/\D//g;
-    $payinfo =~ /^(\d{13,16}|\d{8,9})$/
-      or return gettext('invalid_card'); # . ": ". $self->payinfo;
-    $payinfo = $1;
-    $self->payinfo($payinfo);
-    validate($payinfo)
-      or return gettext('invalid_card'); # . ": ". $self->payinfo;
+    if ($payinfo !~ /^card_token:./) {
+      $payinfo =~ s/\D//g;
+      $payinfo =~ /^(\d{13,16}|\d{8,9})$/
+        or return gettext('invalid_card'); # . ": ". $self->payinfo;
+      $payinfo = $1;
+      $self->payinfo($payinfo);
+      validate($payinfo)
+        or return gettext('invalid_card'); # . ": ". $self->payinfo;
 
-    return gettext('unknown_card_type')
-      if $self->payinfo !~ /^99\d{14}$/ #token
-      && cardtype($self->payinfo) eq "Unknown";
+      return gettext('unknown_card_type')
+        if $self->payinfo !~ /^99\d{14}$/ #token
+        && cardtype($self->payinfo) eq "Unknown";
+    }
 
     unless ( $ignore_banned_card ) {
       my $ban = FS::banned_pay->ban_search( %{ $self->_banned_pay_hashref } );
@@ -1900,7 +1928,8 @@ sub check {
       $self->payissue('');
     }
 
-  } elsif ( $check_payinfo && $self->payby =~ /^(CHEK|DCHK)$/ ) {
+  } elsif ( !$ignore_invalid_card && $check_payinfo && 
+    $self->payby =~ /^(CHEK|DCHK)$/ ) {
 
     my $payinfo = $self->payinfo;
     $payinfo =~ s/[^\d\@\.]//g;
@@ -2094,6 +2123,21 @@ sub cust_contact {
   qsearch('contact', { 'custnum' => $self->custnum } );
 }
 
+=item cust_payby
+
+Returns all payment methods (see L<FS::cust_payby>) for this customer.
+
+=cut
+
+sub cust_payby {
+  my $self = shift;
+  qsearch({
+    'table'    => 'cust_payby',
+    'hashref'  => { 'custnum' => $self->custnum },
+    'order_by' => 'ORDER BY weight ASC',
+  });
+}
+
 =item unsuspend
 
 Unsuspends all unflagged suspended packages (see L</unflagged_suspended_pkgs>
@@ -2104,7 +2148,7 @@ on success or a list of errors.
 
 sub unsuspend {
   my $self = shift;
-  grep { $_->unsuspend } $self->suspended_pkgs;
+  grep { $_->unsuspend(@_) } $self->suspended_pkgs;
 }
 
 =item suspend
@@ -3714,6 +3758,19 @@ sub cust_credit_pkgnum {
     );
 }
 
+=item cust_credit_void
+
+Returns all voided credits (see L<FS::cust_credit_void>) for this customer.
+
+=cut
+
+sub cust_credit_void {
+  my $self = shift;
+  map { $_ }
+  sort { $a->_date <=> $b->_date }
+    qsearch( 'cust_credit_void', { 'custnum' => $self->custnum } )
+}
+
 =item cust_pay
 
 Returns all the payments (see L<FS::cust_pay>) for this customer.
@@ -4057,6 +4114,16 @@ sub ship_contact_firstlast {
 #  my $self = shift;
 #  code2country($self->country);
 #}
+
+sub bill_country_full {
+  my $self = shift;
+  code2country($self->bill_location->country);
+}
+
+sub ship_country_full {
+  my $self = shift;
+  code2country($self->ship_location->country);
+}
 
 =item county_state_county [ PREFIX ]
 
@@ -4897,9 +4964,9 @@ sub queueable_print {
   my %opt = @_;
 
   my $self = qsearchs('cust_main', { 'custnum' => $opt{custnum} } )
-    or die "invalid customer number: " . $opt{custvnum};
+    or die "invalid customer number: " . $opt{custnum};
 
-  my $error = $self->print( $opt{template} );
+  my $error = $self->print( { 'template' => $opt{template} } );
   die $error if $error;
 }
 
@@ -5127,13 +5194,12 @@ sub _upgrade_data { #class method
       die $error if $error;
 
       $cust_main->setfield($_, '') foreach @payfields;
-      $DEBUG = 2;
       $error = $cust_main->replace;
       die $error if $error;
 
     };
 
-    FS::upgrade_journal->set_done('cust_main__trimspaces');
+    FS::upgrade_journal->set_done('cust_main__cust_payby');
   }
 
   $class->_upgrade_otaker(%opts);

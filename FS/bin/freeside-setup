@@ -1,4 +1,4 @@
-#!/usr/bin/perl -w
+#!/usr/bin/env perl
 
 #to delay loading dbdef until we're ready
 BEGIN { $FS::Schema::setup_hack = 1; }

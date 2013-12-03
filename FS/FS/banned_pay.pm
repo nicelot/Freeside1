@@ -142,6 +142,7 @@ Returns the ban, or false if no ban was found.
 
 sub ban_search {
   my( $class, %opt ) = @_;
+  my $conf = new FS::Conf;
   qsearchs({
     'table'     => 'banned_pay',
     'hashref'   => {

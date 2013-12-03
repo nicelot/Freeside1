@@ -4,7 +4,6 @@ use base qw( FS::otaker_Mixin FS::cust_main_Mixin FS::Sales_Mixin
              FS::m2m_Common FS::option_Common );
 
 use strict;
-use vars qw($disable_agentcheck $DEBUG $me);
 use Carp qw(cluck);
 use Scalar::Util qw( blessed );
 use List::Util qw(min max);
@@ -35,6 +34,8 @@ use FS::cust_pkg_discount;
 use FS::discount;
 use FS::UI::Web;
 use FS::sales;
+# for modify_charge
+use FS::cust_credit;
 
 # need to 'use' these instead of 'require' in sub { cancel, suspend, unsuspend,
 # setup }
@@ -47,10 +48,9 @@ use FS::svc_forward;
 # for sending cancel emails in sub cancel
 use FS::Conf;
 
-$DEBUG = 0;
-$me = '[FS::cust_pkg]';
+our ($disable_agentcheck, $DEBUG, $me, $import) = (0, 0, '[FS::cust_pkg]', 0);
 
-$disable_agentcheck = 0;
+our $upgrade = 0; #go away after setup+start dates cleaned up for old customers
 
 sub _cache {
   my $self = shift;
@@ -294,37 +294,40 @@ sub insert {
 
   my $part_pkg = $self->part_pkg;
 
-  # if the package def says to start only on the first of the month:
-  if ( $part_pkg->option('start_1st', 1) && !$self->start_date ) {
-    my ($sec,$min,$hour,$mday,$mon,$year) = (localtime(time) )[0,1,2,3,4,5];
-    $mon += 1 unless $mday == 1;
-    until ( $mon < 12 ) { $mon -= 12; $year++; }
-    $self->start_date( timelocal_nocheck(0,0,0,1,$mon,$year) );
-  }
+  if (! $import) {
+    # if the package def says to start only on the first of the month:
+    if ( $part_pkg->option('start_1st', 1) && !$self->start_date ) {
+      my ($sec,$min,$hour,$mday,$mon,$year) = (localtime(time) )[0,1,2,3,4,5];
+      $mon += 1 unless $mday == 1;
+      until ( $mon < 12 ) { $mon -= 12; $year++; }
+      $self->start_date( timelocal_nocheck(0,0,0,1,$mon,$year) );
+    }
 
-  # set up any automatic expire/adjourn/contract_end timers
-  # based on the start date
-  foreach my $action ( qw(expire adjourn contract_end) ) {
-    my $months = $part_pkg->option("${action}_months",1);
-    if($months and !$self->$action) {
-      my $start = $self->start_date || $self->setup || time;
-      $self->$action( $part_pkg->add_freq($start, $months) );
+    # set up any automatic expire/adjourn/contract_end timers
+    # based on the start date
+    foreach my $action ( qw(expire adjourn contract_end) ) {
+      my $months = $part_pkg->option("${action}_months",1);
+      if($months and !$self->$action) {
+        my $start = $self->start_date || $self->setup || time;
+        $self->$action( $part_pkg->add_freq($start, $months) );
+      }
+    }
+
+    # if this package has "free days" and delayed setup fee, tehn 
+    # set start date that many days in the future.
+    # (this should have been set in the UI, but enforce it here)
+    if (    ! $options{'change'}
+         && ( my $free_days = $part_pkg->option('free_days',1) )
+         && $part_pkg->option('delay_setup',1)
+         #&& ! $self->start_date
+       )
+    {
+      $self->start_date( $part_pkg->default_start_date );
     }
   }
 
-  # if this package has "free days" and delayed setup fee, tehn 
-  # set start date that many days in the future.
-  # (this should have been set in the UI, but enforce it here)
-  if (    ! $options{'change'}
-       && ( my $free_days = $part_pkg->option('free_days',1) )
-       && $part_pkg->option('delay_setup',1)
-       #&& ! $self->start_date
-     )
-  {
-    $self->start_date( $part_pkg->default_start_date );
-  }
-
-  $self->order_date(time);
+  # set order date unless it was specified as part of an import
+  $self->order_date(time) unless $import && $self->order_date;
 
   local $SIG{HUP} = 'IGNORE';
   local $SIG{INT} = 'IGNORE';
@@ -360,7 +363,7 @@ sub insert {
 
   my $conf = new FS::Conf;
 
-  if ( $conf->config('ticket_system') && $options{ticket_subject} ) {
+  if ( ! $import && $conf->config('ticket_system') && $options{ticket_subject} ) {
 
     #this init stuff is still inefficient, but at least its limited to 
     # the small number (any?) folks using ticket emailing on pkg order
@@ -390,7 +393,7 @@ sub insert {
                );
   }
 
-  if ($conf->config('welcome_letter') && $self->cust_main->num_pkgs == 1) {
+  if (! $import && $conf->config('welcome_letter') && $self->cust_main->num_pkgs == 1) {
     my $queue = new FS::queue {
       'job'     => 'FS::cust_main::queueable_print',
     };
@@ -654,7 +657,7 @@ sub check {
   return $error if $error;
 
   return "A package with both start date (future start) and setup date (already started) will never bill"
-    if $self->start_date && $self->setup;
+    if $self->start_date && $self->setup && ! $upgrade;
 
   return "A future unsuspend date can only be set for a package with a suspend date"
     if $self->resume and !$self->susp and !$self->adjourn;
@@ -1022,7 +1025,7 @@ sub uncancel {
     return $error;
   }
 
-  ##
+  #
   # insert services
   ##
 
@@ -1117,6 +1120,18 @@ sub uncancel {
     if ( $error ) {
       $dbh->rollback if $oldAutoCommit;
       return "canceling supplemental pkg#".$supp_pkg->pkgnum.": $error";
+    }
+  }
+
+  if ( $options{'reason'} ) {
+    $error = $self->insert_reason( 'reason' => $options{'reason'},
+                                   'action' => 'uncancel',
+                                   'date'   => $start,
+                                   'reason_otaker' => $options{'reason_otaker'},
+                                 );
+    if ( $error ) {
+      dbh->rollback if $oldAutoCommit;
+      return "Error inserting cust_pkg_reason: $error";
     }
   }
 
@@ -1517,6 +1532,18 @@ sub unsuspend {
   
   } #if $date 
 
+  if ( $opt{'reason'} ) {
+    $error = $self->insert_reason( 'reason' => $opt{'reason'},
+                                   'action' => 'unsuspend',
+                                   'date'   => $date,
+                                   'reason_otaker' => $opt{'reason_otaker'},
+                                 );
+    if ( $error ) {
+      dbh->rollback if $oldAutoCommit;
+      return "Error inserting cust_pkg_reason: $error";
+    }
+  }
+
   my @labels = ();
 
   foreach my $cust_svc (
@@ -1856,7 +1883,7 @@ sub change {
   if ( $opt->{cust_main} ) {
     my $cust_main = $opt->{cust_main};
     unless ( $cust_main->custnum ) { 
-      my $error = $cust_main->insert;
+      my $error = $cust_main->insert( @{ $opt->{cust_main_insert_args}||[] } );
       if ( $error ) {
         $dbh->rollback if $oldAutoCommit;
         return "inserting cust_main (transaction rolled back): $error";
@@ -2256,7 +2283,127 @@ sub set_salesnum {
   $self = $self->replace_old; # just to make sure
   $self->salesnum(shift);
   $self->replace;
+  # XXX this should probably reassign any credit that's already been given
 }
+
+=item modify_charge OPTIONS
+
+Change the properties of a one-time charge.  Currently the only properties
+that can be changed this way are those that have no impact on billing 
+calculations:
+- pkg: the package description
+- classnum: the package class
+- additional: arrayref of additional invoice details to add to this package
+
+If you pass 'adjust_commission' => 1, and the classnum changes, and there are
+commission credits linked to this charge, they will be recalculated.
+
+=cut
+
+sub modify_charge {
+  my $self = shift;
+  my %opt = @_;
+  my $part_pkg = $self->part_pkg;
+  my $pkgnum = $self->pkgnum;
+
+  my $dbh = dbh;
+  my $oldAutoCommit = $FS::UID::AutoCommit;
+  local $FS::UID::AutoCommit = 0;
+
+  return "Can't use modify_charge except on one-time charges"
+    unless $part_pkg->freq eq '0';
+
+  if ( length($opt{'pkg'}) and $part_pkg->pkg ne $opt{'pkg'} ) {
+    $part_pkg->set('pkg', $opt{'pkg'});
+  }
+
+  my %pkg_opt = $part_pkg->options;
+  if ( ref($opt{'additional'}) ) {
+    delete $pkg_opt{$_} foreach grep /^additional/, keys %pkg_opt;
+    my $i;
+    for ( $i = 0; exists($opt{'additional'}->[$i]); $i++ ) {
+      $pkg_opt{ "additional_info$i" } = $opt{'additional'}->[$i];
+    }
+    $pkg_opt{'additional_count'} = $i if $i > 0;
+  }
+
+  my $old_classnum;
+  if ( exists($opt{'classnum'}) and $part_pkg->classnum ne $opt{'classnum'} ) {
+    # remember it
+    $old_classnum = $part_pkg->classnum;
+    $part_pkg->set('classnum', $opt{'classnum'});
+  }
+
+  my $error = $part_pkg->replace( options => \%pkg_opt );
+  return $error if $error;
+
+  if (defined $old_classnum) {
+    # fix invoice grouping records
+    my $old_catname = $old_classnum
+                      ? FS::pkg_class->by_key($old_classnum)->categoryname
+                      : '';
+    my $new_catname = $opt{'classnum'}
+                      ? $part_pkg->pkg_class->categoryname
+                      : '';
+    if ( $old_catname ne $new_catname ) {
+      foreach my $cust_bill_pkg ($self->cust_bill_pkg) {
+        # (there should only be one...)
+        my @display = qsearch( 'cust_bill_pkg_display', {
+            'billpkgnum'  => $cust_bill_pkg->billpkgnum,
+            'section'     => $old_catname,
+        });
+        foreach (@display) {
+          $_->set('section', $new_catname);
+          $error = $_->replace;
+          if ( $error ) {
+            $dbh->rollback if $oldAutoCommit;
+            return $error;
+          }
+        }
+      } # foreach $cust_bill_pkg
+    }
+
+    if ( $opt{'adjust_commission'} ) {
+      # fix commission credits...tricky.
+      foreach my $cust_event ($self->cust_event) {
+        my $part_event = $cust_event->part_event;
+        foreach my $table (qw(sales agent)) {
+          my $class =
+            "FS::part_event::Action::Mixin::credit_${table}_pkg_class";
+          my $credit = qsearchs('cust_credit', {
+              'eventnum' => $cust_event->eventnum,
+          });
+          if ( $part_event->isa($class) ) {
+            # Yes, this results in current commission rates being applied 
+            # retroactively to a one-time charge.  For accounting purposes 
+            # there ought to be some kind of time limit on doing this.
+            my $amount = $part_event->_calc_credit($self);
+            if ( $credit and $credit->amount ne $amount ) {
+              # Void the old credit.
+              $error = $credit->void('Package class changed');
+              if ( $error ) {
+                $dbh->rollback if $oldAutoCommit;
+                return "$error (adjusting commission credit)";
+              }
+            }
+            # redo the event action to recreate the credit.
+            local $@ = '';
+            eval { $part_event->do_action( $self, $cust_event ) };
+            if ( $@ ) {
+              $dbh->rollback if $oldAutoCommit;
+              return $@;
+            }
+          } # if $part_event->isa($class)
+        } # foreach $table
+      } # foreach $cust_event
+    } # if $opt{'adjust_commission'}
+  } # if defined $old_classnum
+
+  $dbh->commit if $oldAutoCommit;
+  '';
+}
+
+
 
 use Storable 'thaw';
 use MIME::Base64;
@@ -2613,13 +2760,29 @@ sub part_pkg_currency_option {
 
 =item cust_svc [ OPTION => VALUE ... ] (current usage)
 
+=item cust_svc_unsorted [ OPTION => VALUE ... ] 
+
 Returns the services for this package, as FS::cust_svc objects (see
 L<FS::cust_svc>).  Available options are svcpart and svcdb.  If either is
 spcififed, returns only the matching services.
 
+As an optimization, use the cust_svc_unsorted version if you are not displaying
+the results.
+
 =cut
 
 sub cust_svc {
+  my $self = shift;
+  cluck "cust_pkg->cust_svc called" if $DEBUG > 2;
+  $self->_sort_cust_svc( $self->cust_svc_unsorted_arrayref );
+}
+
+sub cust_svc_unsorted {
+  my $self = shift;
+  @{ $self->cust_svc_unsorted_arrayref };
+}
+
+sub cust_svc_unsorted_arrayref {
   my $self = shift;
 
   return () unless $self->num_cust_svc(@_);
@@ -2645,13 +2808,7 @@ sub cust_svc {
     $search{extra_sql} = ' AND svcdb = '. dbh->quote( $opt{'svcdb'} );
   }
 
-  cluck "cust_pkg->cust_svc called" if $DEBUG > 2;
-
-  #if ( $self->{'_svcnum'} ) {
-  #  values %{ $self->{'_svcnum'}->cache };
-  #} else {
-    $self->_sort_cust_svc( [ qsearch(\%search) ] );
-  #}
+  [ qsearch(\%search) ];
 
 }
 
@@ -3328,8 +3485,7 @@ sub attribute_since_sqlradacct {
   foreach my $cust_svc (
     grep {
       my $part_svc = $_->part_svc;
-      $part_svc->svcdb eq 'svc_acct'
-        && scalar($part_svc->part_export_usage);
+      scalar($part_svc->part_export_usage);
     } $self->cust_svc
   ) {
     $sum += $cust_svc->attribute_since_sqlradacct($start, $end, $attrib);
@@ -4151,6 +4307,32 @@ boolean; if true, returns only packages with more than 0 FCC phone lines.
 Limit to packages with a service location in the specified state and country.
 For FCC 477 reporting, mostly.
 
+=item location_cust
+
+Limit to packages whose service locations are the same as the customer's 
+default service location.
+
+=item location_nocust
+
+Limit to packages whose service locations are not the customer's default 
+service location.
+
+=item location_census
+
+Limit to packages whose service locations have census tracts.
+
+=item location_nocensus
+
+Limit to packages whose service locations do not have a census tract.
+
+=item location_geocode
+
+Limit to packages whose locations have geocodes.
+
+=item location_geocode
+
+Limit to packages whose locations do not have geocodes.
+
 =back
 
 =cut
@@ -4166,6 +4348,14 @@ sub search {
   if ( $params->{'agentnum'} =~ /^(\d+)$/ and $1 ) {
     push @where,
       "cust_main.agentnum = $1";
+  }
+
+  ##
+  # parse cust_status
+  ##
+
+  if ( $params->{'cust_status'} =~ /^([a-z]+)$/ ) {
+    push @where, FS::cust_main->cust_status_sql . " = '$1' ";
   }
 
   ##
@@ -4372,6 +4562,22 @@ sub search {
       # XXX post-2.3 only--before that, state/country may be in cust_main
       push @where, "cust_location.$_ = '$1'";
     }
+  }
+
+  ###
+  # location_* flags
+  ###
+  if ( $params->{location_cust} xor $params->{location_nocust} ) {
+    my $op = $params->{location_cust} ? '=' : '!=';
+    push @where, "cust_location.locationnum $op cust_main.ship_locationnum";
+  }
+  if ( $params->{location_census} xor $params->{location_nocensus} ) {
+    my $op = $params->{location_census} ? "IS NOT NULL" : "IS NULL";
+    push @where, "cust_location.censustract $op";
+  }
+  if ( $params->{location_geocode} xor $params->{location_nogeocode} ) {
+    my $op = $params->{location_geocode} ? "IS NOT NULL" : "IS NULL";
+    push @where, "cust_location.geocode $op";
   }
 
   ###

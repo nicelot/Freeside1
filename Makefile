@@ -7,9 +7,10 @@ DB_TYPE = Pg
 #DB_TYPE = mysql
 
 DB_USER = freeside
-DB_PASSWORD=
+DB_PASSWORD=magic
 
-DATASOURCE = DBI:${DB_TYPE}:dbname=freeside
+#DATASOURCE = DBI:${DB_TYPE}:dbname=freeside;host=casmysql.alpha.bluehost.com:charset=utf8
+DATASOURCE = DBI:${DB_TYPE}:dbname=freeside2;host=postbench.skynet.alpha.bluehost.com
 
 #changable now (some things which should go to the others still go to CONF)
 FREESIDE_CONF = /usr/local/etc/freeside
@@ -27,14 +28,14 @@ MASONDATA = ${FREESIDE_CACHE}/masondata
 DIST_CONF = ${FREESIDE_CONF}/default_conf
 
 #mod_perl v2 1.999_22 on Apache 2.0 through 2.3 (Debian ancient through 7.x)
-#APACHE_VERSION=2
+APACHE_VERSION=2
 #Apache 2.4 (Debian 8.x)
-APACHE_VERSION=2.4
+#APACHE_VERSION=2.4
 
 #deb
-FREESIDE_DOCUMENT_ROOT = /var/www/freeside
+#FREESIDE_DOCUMENT_ROOT = /var/www/freeside
 #redhat, fedora, mandrake
-#FREESIDE_DOCUMENT_ROOT = /var/www/html/freeside
+FREESIDE_DOCUMENT_ROOT = /var/www/html/freeside
 #freebsd
 #FREESIDE_DOCUMENT_ROOT = /usr/local/www/data/freeside
 #openbsd
@@ -50,18 +51,18 @@ INIT_FILE = /etc/init.d/freeside
 #INIT_FILE = /usr/local/etc/rc.d/011.freeside.sh
 
 #deb
-INIT_INSTALL = PATH=$PATH:/sbin /usr/sbin/update-rc.d freeside defaults 23 01
+#INIT_INSTALL = PATH=$PATH:/sbin /usr/sbin/update-rc.d freeside defaults 23 01
 #redhat, fedora
-#INIT_INSTALL = /sbin/chkconfig freeside on
+INIT_INSTALL = /sbin/chkconfig freeside on
 #not necessary (freebsd)
 #INIT_INSTALL = /usr/bin/true
 
 #deb, suse
 #HTTPD_RESTART = /etc/init.d/apache restart
 #deb w/apache2
-HTTPD_RESTART = /etc/init.d/apache2 restart
+#HTTPD_RESTART = /etc/init.d/apache2 restart
 #redhat, fedora, mandrake
-#HTTPD_RESTART = /etc/init.d/httpd restart
+HTTPD_RESTART = /etc/init.d/httpd restart
 #freebsd
 #HTTPD_RESTART = /usr/local/etc/rc.d/apache.sh stop || true; sleep 10; /usr/local/etc/rc.d/apache.sh start
 #openbsd
@@ -74,6 +75,7 @@ HTTPD_RESTART = /etc/init.d/apache2 restart
 APACHE_CONF = /etc/apache2/conf-available
 #deb (3.1+), apache2
 #APACHE_CONF = /etc/apache2/conf.d
+APACHE_CONF = /etc/httpd/conf.d
 
 INSSERV_OVERRIDE = /etc/insserv/overrides
 
@@ -102,13 +104,14 @@ SELFSERVICE_INSTALL_USERADD = /usr/sbin/useradd
 
 #RT_ENABLED = 0
 RT_ENABLED = 1
-RT_DOMAIN = example.com
-RT_TIMEZONE = US/Pacific
+RT_DOMAIN = alpha.bluehost.com
+RT_TIMEZONE = US/Mountain
 #RT_TIMEZONE = US/Eastern
-FREESIDE_URL = "http://localhost/freeside/"
+FREESIDE_URL = "http://billing.alpha.bluehost.com/freeside/"
 
 #for now, same db as specified in DATASOURCE... eventually, otherwise?
 RT_DB_DATABASE = freeside
+RT_DB_HOST = casmysql.alpha.bluehost.com
 
 TORRUS_ENABLED = 0
 
@@ -122,7 +125,8 @@ RT_PATH = /opt/rt3
 
 #only used for dev kludge now, not a big deal
 FREESIDE_PATH = `pwd`
-PERL_INC_DEV_KLUDGE = /usr/local/share/perl/5.14.2/
+#PERL_INC_DEV_KLUDGE = /usr/local/share/perl/5.14.2/
+PERL_INC_DEV_KLUDGE = /opt/rh/perl516/root/usr/local/share/perl5
 
 VERSION := `grep '^$$VERSION' FS/FS.pm | cut -d\' -f2`
 TAG := freeside_`grep '^$$VERSION' FS/FS.pm | cut -d\' -f2 | perl -pe 's/\./_/g'`
@@ -368,7 +372,8 @@ configure-rt:
 	            --with-web-user=freeside \
 	            --with-web-group=freeside \
 	            --with-rt-group=freeside \
-	            --with-web-handler=modperl2
+	            --with-web-handler=modperl2 \
+                    --with-db-host="${RT_DB_HOST}"
 
 create-rt: configure-rt
 	[ -d /opt           ] || mkdir /opt           #doh

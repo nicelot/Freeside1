@@ -353,6 +353,11 @@ if ( -e $addl_handler_use_file ) {
   use FS::sales_pkg_class;
   use FS::svc_alarm;
   use FS::cable_model;
+  use FS::invoice_mode;
+  use FS::invoice_conf;
+  use FS::cable_provider;
+  use FS::cust_credit_void;
+  use FS::discount_class;
   # Sammath Naur
 
   if ( $FS::Mason::addl_handler_use ) {

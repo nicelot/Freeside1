@@ -36,6 +36,7 @@ FS::UID->install_callback( sub {
 } );
 
 @encrypted_fields = ('payinfo');
+sub nohistory_fields { ('payinfo'); }
 
 =head1 NAME
 
@@ -215,6 +216,9 @@ sub insert {
   my $oldAutoCommit = $FS::UID::AutoCommit;
   local $FS::UID::AutoCommit = 0;
   my $dbh = dbh;
+
+  # we do not need to encrypt tokens. and it's easier to show auditors your using tokens if they are not encrypted
+  local @encrypted_fields = grep( $_ ne 'payinfo', @encrypted_fields ) if $self->payinfo =~ /^card_token:./;
 
   my $cust_bill;
   if ( $self->invnum ) {
@@ -487,6 +491,10 @@ otherwise returns false.
 sub replace {
   my $self = shift;
   return "Can't modify closed payment" if $self->closed =~ /^Y/i;
+
+  # we do not need to encrypt tokens. and it's easier to show auditors your using tokens if they are not encrypted
+  local @encrypted_fields = grep( $_ ne 'payinfo', @encrypted_fields ) if $self->payinfo =~ /^card_token:./;
+
   $self->SUPER::replace(@_);
 }
 

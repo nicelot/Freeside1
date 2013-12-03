@@ -67,7 +67,7 @@ $LocalLibPath        =    '/opt/rt3/local/lib';
 $LocalLexiconPath = '/opt/rt3/local/po';
 $LocalPluginPath = '/opt/rt3/local/plugins';
 # $MasonComponentRoot is where your rt instance keeps its mason html files
-$MasonComponentRoot = '/var/www/freeside/rt';
+$MasonComponentRoot = '/var/www/html/freeside/rt';
 # $MasonLocalComponentRoot is where your rt instance keeps its site-local
 # mason html files.
 $MasonLocalComponentRoot = '/opt/rt3/local/html';

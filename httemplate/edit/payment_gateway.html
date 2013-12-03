@@ -43,6 +43,7 @@ my $json = JSON::XS->new;
 $json->canonical(1);
 my %modules = (
   'Business::OnlinePayment' => [
+    'CAS',
     '2CheckOut',
     'AuthorizeNet',
     'BankOfAmerica', #deprecated?

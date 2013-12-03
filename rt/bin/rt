@@ -1,4 +1,4 @@
-#!/usr/bin/perl -w
+#!/opt/rh/perl514/root/usr/bin/perl -w
 # BEGIN BPS TAGGED BLOCK {{{
 #
 # COPYRIGHT:

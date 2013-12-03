@@ -1,4 +1,4 @@
-#!/usr/bin/perl -w
+#!/usr/bin/env perl
 
 use strict;
 use vars qw( $FREESIDE_LOG $FREESIDE_LOCK );

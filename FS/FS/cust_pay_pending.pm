@@ -12,6 +12,7 @@ use FS::cust_pay;
 @ISA = qw( FS::payinfo_transaction_Mixin FS::cust_main_Mixin FS::Record );
 
 @encrypted_fields = ('payinfo');
+sub nohistory_fields { ('payinfo'); }
 
 =head1 NAME
 
@@ -182,6 +183,15 @@ otherwise returns false.
 
 # the insert method can be inherited from FS::Record
 
+sub insert {
+  my $self = shift;
+
+  # we do not need to encrypt tokens. and it's easier to show auditors your using tokens if they are not encrypted
+  local @encrypted_fields = grep( $_ ne 'payinfo', @encrypted_fields ) if $self->payinfo =~ /^card_token:./;
+
+  $self->SUPER::insert;
+}
+
 =item delete
 
 Delete this record from the database.
@@ -198,6 +208,15 @@ returns the error, otherwise returns false.
 =cut
 
 # the replace method can be inherited from FS::Record
+
+sub replace {
+  my $self = shift;
+
+  # we do not need to encrypt tokens. and it's easier to show auditors your using tokens if they are not encrypted
+  local @encrypted_fields = grep( $_ ne 'payinfo', @encrypted_fields ) if $self->payinfo =~ /^card_token:./;
+
+  $self->SUPER::replace;
+}
 
 =item check
 

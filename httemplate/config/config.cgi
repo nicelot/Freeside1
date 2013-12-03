@@ -92,7 +92,7 @@ Setting <b><% $key %></b>
 %   } elsif ( $type eq 'select' || $type eq 'selectmultiple' )  {
 %     $submit++;
  
-  <select name="<% "$key$n" %>" <% $type eq 'selectmultiple' ? 'MULTIPLE' : '' %>>
+  <select name="<% "$key$n" %>" <% $type eq 'selectmultiple' ? 'MULTIPLE' : '' %> size='15'>
 
 %
 %     my %hash = ();
@@ -149,7 +149,7 @@ Setting <b><% $key %></b>
 %   } elsif ( $type eq 'select-sub' ) {
 %     $submit++;
 
-  <select name="<% "$key$n" %>" <% $config_item->multiple ? 'MULTIPLE' : '' %>>
+  <select name="<% "$key$n" %>" <% $config_item->multiple ? 'MULTIPLE' : '' %> size='15' >
 
 %     unless ( $config_item->multiple ) {
         <option value="">
@@ -168,9 +168,7 @@ Setting <b><% $key %></b>
 %         if ( $value eq $conf->config($key, $agentnum)
 %              || ( $config_item->multiple
 %                   && grep { $_ eq $value } $conf->config($key, $agentnum) ) ){
-
             SELECTED
-
 %         }
 
         ><% $value %>: <% $options{$value} %>

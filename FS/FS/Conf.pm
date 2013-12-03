@@ -1,6 +1,6 @@
 package FS::Conf;
 
-use vars qw($base_dir @config_items @base_items @card_types $DEBUG);
+our ($base_dir, @config_items, @base_items, @card_types, $DEBUG);
 use Carp;
 use IO::File;
 use File::Basename;
@@ -120,6 +120,7 @@ sub _config {
   my($self,$name,$agentnum,$agentonly)=@_;
   my $hashref = { 'name' => $name };
   local $FS::Record::conf = undef;  # XXX evil hack prevents recursion
+  #my $DEBUG = 5;
   my $cv;
   my @a = (
     ($agentnum || ()),
@@ -129,13 +130,37 @@ sub _config {
     ($self->{locale} || ()),
     ($self->{localeonly} && $self->{locale} ? () : '')
   );
+
   # try with the agentnum first, then fall back to no agentnum if allowed
+
+  if( ! $self->{'conf_cache'} ) {
+    ## is this checking for memcache itself? if so we don't want a inifinite loop!
+    #  So we'll handle is in a special manner
+    if( $name =~ m/^memcache/ ) {
+      return FS::Record::qsearchs('conf', { name => $name } );
+    }
+    else {
+      my $cached = FS::UID::get_cached;
+
+      $self->{'conf_cache'} = $cached->get('conf_cache') if $cached;
+      if( ! $self->{'conf_cache'} ) {
+        foreach my $c (qsearch('conf')) {
+          my $key = join(':',$c->name, $c->agentnum, $c->locale);
+          $self->{'conf_cache'}->{ $key } = $c;
+        }
+        $cached->set('conf_cache', $self->{'conf_cache'}) if $cached;
+      }
+    }
+  }
+  
   foreach my $a (@a) {
     $hashref->{agentnum} = $a;
     foreach my $l (@l) {
       $hashref->{locale} = $l;
-      $cv = FS::Record::qsearchs('conf', $hashref);
-      return $cv if $cv;
+      my $key = join(':',$name, $a, $l);
+      if ($self->{'conf_cache'}->{$key}){ 
+        return $self->{'conf_cache'}->{$key};
+      }
     }
   }
   return undef;
@@ -359,6 +384,13 @@ sub set {
     $error = $new->replace($old);
   } else {
     $error = $new->insert;
+  }
+  if (! $error) {
+    # clean the object cache
+    my $key = join(':',$name, $agentnum, $self->{locale});
+    $self->{'conf_cache'}->{ $key } = $new;
+    my $cached = FS::UID::get_cached;
+    $cached->set('conf_cache', $self->{'conf_cache'}) if $cached;
   }
 
   die "error setting configuration value: $error \n"
@@ -935,7 +967,19 @@ sub reason_type_options {
     'type'        => 'text',
     'per_agent'   => 1,
   },
-  
+
+  {
+    'key'         => 'billco-account_num',
+    'section'     => 'billing',
+    'description' => 'The data to place in the "Transaction Account No" / "TRACCTNUM" field.',
+    'type'        => 'select',
+    'select_hash' => [
+                       'invnum-date' => 'Invoice number - Date (default)',
+                       'display_custnum'  => 'Customer number',
+                     ],
+    'per_agent'   => 1,
+  },
+
   {
     'key'         => 'next-bill-ignore-time',
     'section'     => 'billing',
@@ -1712,6 +1756,21 @@ and customer address. Include units.',
   },
 
   {
+    'key'         => 'sip_passwordmin',
+    'section'     => 'telephony',
+    'description' => 'Minimum SIP password length (default 6)',
+    'type'        => 'text',
+  },
+
+  {
+    'key'         => 'sip_passwordmax',
+    'section'     => 'telephony',
+    'description' => 'Maximum SIP password length (default 8) (don\'t set this over 12 if you need to import or export crypt() passwords)',
+    'type'        => 'text',
+  },
+
+
+  {
     'key'         => 'password-noampersand',
     'section'     => 'password',
     'description' => 'Disallow ampersands in passwords',
@@ -2024,6 +2083,13 @@ and customer address. Include units.',
     'key'         => 'safe-part_bill_event',
     'section'     => 'UI',
     'description' => 'Validates invoice event expressions against a preset list.  Useful for webdemos, annoying to powerusers.',
+    'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'show_ship_company',
+    'section'     => 'UI',
+    'description' => 'Turns on display/collection of a "service company name" field for customers.',
     'type'        => 'checkbox',
   },
 
@@ -3862,6 +3928,14 @@ and customer address. Include units.',
     'select_enum' => ['String::Approx', 'PG levenschtein', 'pg_trgm'],
   },
   {
+    'key'         => 'fuzzy-method',
+    'section'     => 'UI',
+    'description' => 'What underlying strategy should be used for fuzzy searches? Defaults to "String::Approx".',
+    'type'        => 'select',
+    'select_enum' => ['String::Approx', 'PG levenschtein', 'pg_trgm'],
+  },
+
+  {
     'key'         => 'fuzzy-fuzziness',
     'section'     => 'UI',
     'description' => 'Set the "fuzziness" of fuzzy searching (see the String::Approx manpage for details).  Defaults to 10%',
@@ -4057,7 +4131,7 @@ and customer address. Include units.',
     'type'        => 'select',
     'multiple'    => 1,
     'select_hash' => [ 
-      #'address1' => 'Billing address',
+      'address' => 'Billing or service address',
     ],
   },
 
@@ -4176,6 +4250,13 @@ and customer address. Include units.',
   },
 
   {
+    'key'         => 'previous_balance-payments_since',
+    'section'     => 'invoicing',
+    'description' => 'Instead of showing payments (and credits) applied to the invoice, show those received since the previous invoice date.',
+    'type'        => 'checkbox',
+  },
+
+  {
     'key'         => 'balance_due_below_line',
     'section'     => 'invoicing',
     'description' => 'Place the balance due message below a line.  Only meaningful when when invoice_sections is false.',
@@ -4195,8 +4276,9 @@ and customer address. Include units.',
     'description' => 'Method for standardizing customer addresses.',
     'type'        => 'select',
     'select_hash' => [ '' => '', 
-                       'usps' => 'U.S. Postal Service',
+                       'usps'     => 'U.S. Postal Service',
                        'ezlocate' => 'EZLocate',
+                       'tomtom'   => 'TomTom',
                      ],
   },
 
@@ -4211,6 +4293,13 @@ and customer address. Include units.',
     'key'         => 'usps_webtools-password',
     'section'     => 'UI',
     'description' => 'Production password for USPS web tools.   Enables USPS address standardization.  See <a href="http://www.usps.com/webtools/">USPS website</a>, register and agree not to use the tools for batch purposes.',
+    'type'        => 'text',
+  },
+
+  {
+    'key'         => 'tomtom-userid',
+    'section'     => 'UI',
+    'description' => 'TomTom geocoding service API key.  See <a href="http://www.tomtom.com/">the TomTom website</a> to obtain a key.  This is recommended for addresses in the United States only.',
     'type'        => 'text',
   },
 
@@ -4245,9 +4334,9 @@ and customer address. Include units.',
   {
     'key'         => 'census_year',
     'section'     => 'UI',
-    'description' => 'The year to use in census tract lookups.  NOTE: you need to select 2012 for Year 2010 Census tract codes.  A selection of 2011 or 2010 provides Year 2000 Census tract codes.  Use the freeside-censustract-update tool if exisitng customers need to be changed.',
+    'description' => 'The year to use in census tract lookups.  NOTE: you need to select 2012 or 2013 for Year 2010 Census tract codes.  A selection of 2011 provides Year 2000 Census tract codes.  Use the freeside-censustract-update tool if exisitng customers need to be changed.',
     'type'        => 'select',
-    'select_enum' => [ qw( 2012 2011 2010 ) ],
+    'select_enum' => [ qw( 2013 2012 2011 ) ],
   },
 
   {
@@ -4728,6 +4817,17 @@ and customer address. Include units.',
     'section'     => 'self-service',
     'description' => 'Issue a warning if the same credit card is used for multiple signups within this many hours.',
     'type'        => 'text',
+  },
+
+  {
+    'key'         => 'svc_phone-radius-password',
+    'section'     => 'telephony',
+    'description' => 'Password when exporting svc_phone records to RADIUS',
+    'type'        => 'select',
+    'select_hash' => [
+      '' => 'Use default from svc_phone-radius-default_password config',
+      'countrycode_phonenum' => 'Phone number (with country code)',
+    ],
   },
 
   {
@@ -5225,7 +5325,7 @@ and customer address. Include units.',
   {
     'key'         => 'svc_phone-did-summary',
     'section'     => 'invoicing',
-    'description' => 'Enable DID activity summary on invoices, showing # DIDs activated/deactivated/ported-in/ported-out and total minutes usage, covering period since last invoice.',
+    'description' => 'Experimental feature to enable DID activity summary on invoices, showing # DIDs activated/deactivated/ported-in/ported-out and total minutes usage, covering period since last invoice.',
     'type'        => 'checkbox',
   },
 
@@ -5515,6 +5615,33 @@ and customer address. Include units.',
     'key'         => 'external_auth-access_group-template_user',
     'section'     => 'UI',
     'description' => 'When using an external authentication module, specifies the default access groups for autocreated users, via a template user.',
+    'type'        => 'text',
+  },
+
+  {
+    'key'         => 'allow_invalid_cards',
+    'section'     => '',
+    'description' => 'Accept invalid credit card numbers.  Useful for testing with fictitious customers.  There is no good reason to enable this in production.',
+    'type'        => 'checkbox',
+  },
+  {
+    'key'         => 'memcache',
+    'section'     => 'cache',
+    'description' => 'Enable Usage of a memcache system.',
+    'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'memcache-server',
+    'section'     => 'cache',
+    'description' => 'Memcache server to give as parameter for initialization (hostname:port)',
+    'type'        => 'textarea',
+  },
+
+  {
+    'key'         => 'cache_expire',
+    'section'     => 'cache',
+    'description' => 'Number of seconds to automatically age off any cached data',
     'type'        => 'text',
   },
 
