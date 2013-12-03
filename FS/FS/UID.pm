@@ -178,7 +178,6 @@ sub callback_setup {
 }
 
 sub myconnect {
-<<<<<<< HEAD
   my $options = shift || {};
   my $handle = DBI->connect( getsecrets($options), 
     { 'AutoCommit'         => 0,
@@ -187,15 +186,6 @@ sub myconnect {
       'pg_enable_utf8'     => 1,
       #'mysql_enable_utf8'  => 1,
     })
-=======
-  my $handle = DBI->connect( getsecrets(), { 'AutoCommit'         => 0,
-                                            'ChopBlanks'         => 1,
-                                            'ShowErrorStatement' => 1,
-                                            'pg_enable_utf8'     => 1,
-                                            'mysql_enable_utf8'  => 1,
-                                          }
-                          )
->>>>>>> 9d0e461b89411c22fd6848384c4563b2dbe1c64d
     or die "DBI->connect error: $DBI::errstr\n";
 
     if ( $schema ) {
