@@ -15,6 +15,7 @@ use FS::CurrentUser;
 use File::Slurp;  # Exports read_file
 use JSON;
 use Try::Tiny;
+use Config::General;
 
 @ISA = qw(Exporter);
 @EXPORT_OK = qw( checkeuid checkruid cgi setcgi adminsuidsetup forksuidsetup
