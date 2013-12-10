@@ -1088,6 +1088,20 @@ I<PG levenstein>, the search will employ the fuzzystrmatch PostgreSQL
 extension to do the search. If the value is I<pg_trgm>, the search will
 employ the pg_trgm PostgreSQL extension to do a trigram match search.
 
+Depending on the value of the C<fuzzy-method> config value, this subroutine 
+will use a different approach. If the value is I<String::Approx>,
+Freeside legacy behavior will ensue and the search will be done against
+plain text files using the L<String::Approx> module. If the value is 
+I<PG levenstein>, the search will employ the fuzzystrmatch PostgreSQL 
+extension to do the search. If the value is I<pg_trgm>, the search will
+employ the pg_trgm PostgreSQL extension to do a trigram match search.
+
+The I<fuzzy-fuzziness> configuration setting sets either the Levenshtein
+distance (for I<PG levenshtein> or I<String::Approx> values of
+I<fuzzy-method>) or the lowest value for the pg_trgm C<similarity()> call
+(Identical strings return 1. Less similar strings return values approaching
+0.)
+
 Additional options are the same as FS::Record::qsearch
 
 =cut
@@ -1099,73 +1113,66 @@ sub fuzzy_search {
 
   my $conf = new FS::Conf;
   my $fuzziness = $conf->config('fuzzy-fuzziness');
+	my %fuzopts = (
+		'table'         => 'cust_main',
+		'addl_from'     => '',
+		'extra_sql'     => '',
+		'order_by'      => undef,
+		'extra_param'   => [],
+		'hashref'       => {},
+		@_
+	);
 
+
+  # PG levenschtein matching
   if ($conf->config('fuzzy-method') eq 'PG levenschtein') {
-    my %fuzopts = (
-      'table'         => 'cust_main',
-      'addl_from'     => '',
-      'extra_sql'     => '',
-      'order_by'      => undef,
-      'extra_param'   => [],
-      'hashref'       => {},
-      @_
-    );  
-    
     foreach my $field ( keys %$fuzzy ) {
-  
-      if ( $field =~ /^cust_location/ ) {
-      $fuzopts{'addl_from'} .= ' JOIN cust_location USING (custnum)';
-      } 
-      
-      $fuzopts{'extra_sql'} .= ' AND ' if length($fuzopts{'extra_sql'});
-      $fuzopts{'extra_sql'} .= " levenshtein($field, ?) < $fuzziness ";
-      push @{$fuzopts{'extra_param'}}, $fuzzy->{$field};
-    }
-
-    $fuzopts{'extra_sql'} = "WHERE " .  $fuzopts{'extra_sql'};
-
-    return qsearch({
-        %fuzopts,
-    });
-
-  }
-  elsif ($conf->config('fuzzy-method') eq 'pg_trgm') {
-    my %fuzopts = (
-      'table'         => 'cust_main',
-      'addl_from'     => '',
-      'extra_sql'     => '',
-      'order_by'      => undef,
-      'extra_param'   => [],
-      'hashref'       => {},
-      @_
-    );
-
-    foreach my $field ( keys %$fuzzy ) {
-      if ( $field =~ /^cust_location/ ) {
-        $fuzopts{'addl_from'} .= ' JOIN cust_location USING (custnum)';
+      my $joins = {};
+      if ( $field =~ /^cust_location/  and !$joins->{'cust_location'}) {
+        $fuzopts{'addl_from'} .= ' JOIN cust_location USING (custnum) ';
+				$joins->{'cust_location'} = 1;
+      }
+      elsif ( $field =~ /^contact/ and !$joins->{'contact'} ) {
+        $fuzopts{'addl_from'} .= ' JOIN contact USING (custnum) ';
+				$joins->{'contact'} = 1;
       }
 
-      $fuzopts{hashref}{$field} = {op => '%', value => $fuzzy->{$field}};
-      $fuzopts{'order_by'} .= ', ' if $fuzopts{'order_by'} =~ m/ORDER BY/;
-      $fuzopts{'order_by'} ||= 'ORDER BY ';
-      $fuzopts{'order_by'} .= sprintf(" similarity(%s, ?) DESC ", $field);
+      $fuzopts{'extra_sql'} .= ' AND ' if length($fuzopts{'extra_sql'});
+      $fuzopts{'extra_sql'} .= " levenshtein(lower($field), lower(?)) < $fuzziness ";
       push @{$fuzopts{'extra_param'}}, $fuzzy->{$field};
     }
-    
+
+    return qsearch({
+			%fuzopts,
+			debug => 1,
+    });
+
+  }	# pg_trgm 
+  elsif ($conf->config('fuzzy-method') eq 'pg_trgm') {
+
+	  if ($fuzziness) {
+			dbh->do("SELECT set_limit(?)", {}, $fuzziness);
+		}
+    my $joins = {};
+    foreach my $field ( keys %$fuzzy ) {
+      if ( $field =~ /^cust_location/  and !$joins->{'cust_location'}) {
+        $fuzopts{'addl_from'} .= ' JOIN cust_location USING (custnum) ';
+				$joins->{'cust_location'} = 1;
+      }
+      elsif ( $field =~ /^contact/ and !$joins->{'contact'} ) {
+        $fuzopts{'addl_from'} .= ' JOIN contact USING (custnum) ';
+				$joins->{'contact'} = 1;
+      }
+
+			$fuzopts{'extra_sql'} .= " AND $field % ? ";
+      push @{$fuzopts{'extra_param'}}, $fuzzy->{$field};
+    }
+
     return qsearch({
       %fuzopts,
     });
-  }
+  } # The old String::Approx method
   else {
-
-    my %fuzopts = (
-        'table'     => 'cust_main',
-        'addl_from' => '',
-        'extra_sql' => '',
-        'hashref'   => {},
-        @_
-    );
-
     my @cust_main = ();
 
     my @fuzzy_mod = 'i';
@@ -1187,23 +1194,23 @@ sub fuzzy_search {
 
       my $extra_sql = $fuzopts{extra_sql};
       if ($extra_sql =~ /^\s*where /i or keys %{ $fuzopts{hashref} }) {
-      $extra_sql .= ' AND ';
+        $extra_sql .= ' AND ';
       } else {
-      $extra_sql .= 'WHERE ';
+        $extra_sql .= 'WHERE ';
       }
       $extra_sql .= "$field $in_matches";
 
-    my $addl_from = $fuzopts{addl_from};
-    if ( $field =~ /^cust_location\./ ) {
-      $addl_from .= ' JOIN cust_location USING (custnum)';
-    } elsif ( $field =~ /^contact\./ ) {
-      $addl_from .= ' JOIN contact USING (custnum)';
-    }
+      my $addl_from = $fuzopts{addl_from};
+      if ( $field =~ /^cust_location\./ ) {
+        $addl_from .= ' JOIN cust_location USING (custnum)';
+      } elsif ( $field =~ /^contact\./ ) {
+        $addl_from .= ' JOIN contact USING (custnum)';
+      }
 
       push @cust_main, qsearch({
-      %fuzopts,
-      'addl_from' => $addl_from,
-      'extra_sql' => $extra_sql,
+      	%fuzopts,
+      	'addl_from' => $addl_from,
+      	'extra_sql' => $extra_sql,
       });
     }
 
@@ -1213,7 +1220,6 @@ sub fuzzy_search {
 
     return @cust_main;
   } 
-
 }
 
 =back
