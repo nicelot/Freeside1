@@ -2303,6 +2303,11 @@ sub change_pkg {
   my $cust_pkg = qsearchs('cust_pkg', { 'pkgnum' => $p->{pkgnum} } )
     or return { 'error' => "unknown package $p->{pkgnum}" };
 
+  #if someone does need self-service package change of suspended packages,
+  # figure out how to be more discriminating
+  return { error=>"Can't change a suspended package", pkgnum=>$cust_pkg->pkgnum}
+    if $cust_pkg->status eq 'suspended';
+
   my @newpkg;
   my $error = FS::cust_pkg::order( $custnum,
                                    [$p->{pkgpart}],
@@ -2313,7 +2318,7 @@ sub change_pkg {
   my $conf = new FS::Conf;
   if ( $conf->exists('signup_server-realtime') ) {
 
-    my $bill_error = _do_bop_realtime( $cust_main, $status );
+    my $bill_error = _do_bop_realtime( $cust_main, $status, 'no_credit'=>1 );
 
     if ($bill_error) {
       $newpkg[0]->suspend;
@@ -2385,25 +2390,32 @@ sub order_recharge {
 }
 
 sub _do_bop_realtime {
-  my ($cust_main, $status) = (shift, shift);
+  my ($cust_main, $status, %opt) = @_;
 
     my $old_balance = $cust_main->balance;
 
     my $bill_error =    $cust_main->bill
-                     || $cust_main->apply_payments_and_credits
-                     || $cust_main->realtime_collect('selfservice' => 1);
+                     || $cust_main->apply_payments_and_credits;
+
+    $bill_error ||= $cust_main->realtime_collect('selfservice' => 1)
+      if $cust_main->payby =~ /^(CARD|CHEK)$/;
 
     if (    $cust_main->balance > $old_balance
          && $cust_main->balance > 0
-         && ( $cust_main->payby !~ /^(BILL|DCRD|DCHK)$/ ?
-              1 : $status eq 'suspended' ) ) {
-      #this makes sense.  credit is "un-doing" the invoice
-      my $conf = new FS::Conf;
-      $cust_main->credit( sprintf("%.2f", $cust_main->balance - $old_balance ),
-                          'self-service decline',
-                          'reason_type' => $conf->config('signup_credit_type'),
-                        );
-      $cust_main->apply_credits( 'order' => 'newest' );
+         && ( $cust_main->payby !~ /^(BILL|DCRD|DCHK)$/
+                || $status eq 'suspended'
+            )
+       )
+    {
+      unless ( $opt{'no_credit'} ) {
+        #this makes sense.  credit is "un-doing" the invoice
+        my $conf = new FS::Conf;
+        $cust_main->credit( sprintf("%.2f", $cust_main->balance-$old_balance ),
+                            'self-service decline',
+                            reason_type=>$conf->config('signup_credit_type'),
+                          );
+        $cust_main->apply_credits( 'order' => 'newest' );
+      }
 
       return { 'error' => '_decline', 'bill_error' => $bill_error };
     }

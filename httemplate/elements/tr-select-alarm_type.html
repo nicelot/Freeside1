@@ -1,0 +1,9 @@
+<& /elements/tr-select-table.html,
+     label       => 'Type',
+     table       => 'alarm_type',
+     #name_col    => 
+     add_inline  => 1,
+     add_fields  => [ 'inputs', 'outputs' ],
+     add_right   => [ 'Alarm configuration', 'Alarm global configuration' ],
+     @_,
+&>

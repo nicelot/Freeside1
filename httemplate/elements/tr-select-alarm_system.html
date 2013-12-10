@@ -1,0 +1,9 @@
+<& /elements/tr-select-table.html,
+     label       => 'Vendor',
+     table       => 'alarm_system',
+     #name_col    => 'systemname',
+     add_inline  => 1,
+     add_fields  => [ 'systemname' ],
+     add_right   => [ 'Alarm configuration', 'Alarm global configuration' ],
+     @_,
+&>

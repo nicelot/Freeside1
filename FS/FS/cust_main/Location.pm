@@ -24,11 +24,13 @@ BEGIN {
     foreach my $f (@location_fields) {
       *{"FS::cust_main::Location::$f"} = sub {
         carp "WARNING: tried to set cust_main.$f with accessor" if (@_ > 1);
-        shift->bill_location->$f
+        my $l = shift->bill_location;
+        $l ? $l->$f : '';
       };
       *{"FS::cust_main::Location::ship_$f"} = sub {
         carp "WARNING: tried to set cust_main.ship_$f with accessor" if (@_ > 1);
-        shift->ship_location->$f
+        my $l = shift->ship_location;
+        $l ? $l->$f : '';
       };
     }
     $init++;
@@ -155,7 +157,12 @@ sub _upgrade_data {
       die "error creating phone type '$_': $error" if $error;
     }
   }
-  foreach my $cust_main (qsearch('cust_main', { bill_locationnum => '' })) {
+
+  foreach my $cust_main (qsearch('cust_main', {
+                           bill_locationnum => '',
+                           address1         => { op=>'!=', value=>'' },
+                        }))
+  {
     # Step 1: extract billing and service addresses into cust_location
     my $custnum = $cust_main->custnum;
     my $bill_location = FS::cust_location->new(

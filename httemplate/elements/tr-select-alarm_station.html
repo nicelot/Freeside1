@@ -1,0 +1,9 @@
+<& /elements/tr-select-table.html,
+     label       => 'Central Station',
+     table       => 'alarm_station',
+     #name_col    => 'stationname',
+     add_inline  => 1,
+     add_fields  => [ 'stationname' ],
+     add_right   => [ 'Alarm configuration', 'Alarm global configuration' ],
+     @_,
+&>
