@@ -14,19 +14,17 @@
 %    %plandata = ();
 %  }
 %
-%  my $seconds = $svc_acct->seconds_since_sqlradacct( $last_bill, time );
+%  my $seconds = $svc->seconds_since_sqlradacct( $last_bill, time );
 %  my $hour = int($seconds/3600);
 %  my $min = int( ($seconds%3600) / 60 );
 %  my $sec = $seconds%60;
 %
-%  my $input = $svc_acct->attribute_since_sqlradacct(
+%  my $input = $svc->attribute_since_sqlradacct(
 %    $last_bill, time, 'AcctInputOctets'
 %  ) / 1048576;
-%  my $output = $svc_acct->attribute_since_sqlradacct(
+%  my $output = $svc->attribute_since_sqlradacct(
 %    $last_bill, time, 'AcctOutputOctets'
 %  ) / 1048576;
-%
-%
 
 
   RADIUS session information<BR>
@@ -56,8 +54,10 @@
 
   Upload: <B><% sprintf("%.3f", $input) %></B> megabytes<BR>
   Download: <B><% sprintf("%.3f", $output) %></B> megabytes<BR>
-  Last Login: <B><% $svc_acct->last_login_text %></B><BR>
-% my $href = qq!<A HREF="${p}search/sqlradius.cgi?svcnum=!. $svc_acct->svcnum; 
+% if ( $svc->table eq 'svc_acct' ) {
+    Last Login: <B><% $svc->last_login_text %></B><BR>
+% }
+% my $href = qq!<A HREF="${p}search/sqlradius.cgi?svcnum=!. $svc->svcnum; 
 
   View session detail:
       <% $href %>;begin=<% $last_bill %>">this billing cycle</A>
@@ -70,7 +70,7 @@
 
 my %opt = @_;
 
-my $svc_acct = $opt{'svc_acct'};
+my $svc = $opt{'svc'};
 my $part_svc = $opt{'part_svc'};
 my $cust_pkg = $opt{'cust_pkg'};
 

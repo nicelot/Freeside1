@@ -2182,7 +2182,7 @@ and customer address. Include units.',
     'section'     => 'self-service',
     'description' => 'Acceptable payment types for the signup server',
     'type'        => 'selectmultiple',
-    'select_enum' => [ qw(CARD DCRD CHEK DCHK LECB PREPAY PPAL BILL COMP) ],
+    'select_enum' => [ qw(CARD DCRD CHEK DCHK PREPAY PPAL BILL COMP) ],
   },
 
   {
@@ -2570,7 +2570,7 @@ and customer address. Include units.',
     'section'     => 'billing',
     'description' => 'Available payment types.',
     'type'        => 'selectmultiple',
-    'select_enum' => [ qw(CARD DCRD CHEK DCHK LECB BILL CASH WEST MCRD PPAL COMP) ],
+    'select_enum' => [ qw(CARD DCRD CHEK DCHK BILL CASH WEST MCRD PPAL COMP) ],
   },
   {
     'key'         => 'banned-pay-pad',
@@ -2584,7 +2584,7 @@ and customer address. Include units.',
     'section'     => 'UI',
     'description' => 'Default payment type.  HIDE disables display of billing information and sets customers to BILL.',
     'type'        => 'select',
-    'select_enum' => [ '', qw(CARD DCRD CHEK DCHK LECB BILL CASH WEST MCRD PPAL COMP HIDE) ],
+    'select_enum' => [ '', qw(CARD DCRD CHEK DCHK BILL CASH WEST MCRD PPAL COMP HIDE) ],
   },
 
   {
