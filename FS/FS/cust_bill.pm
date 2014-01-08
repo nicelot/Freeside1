@@ -15,7 +15,6 @@ use GD::Barcode;
 use FS::UID qw( datasrc );
 use FS::Misc qw( send_email send_fax do_print );
 use FS::Record qw( qsearch qsearchs dbh );
-use FS::cust_main;
 use FS::cust_statement;
 use FS::cust_bill_pkg;
 use FS::cust_bill_pkg_display;
@@ -25,12 +24,10 @@ use FS::cust_pay;
 use FS::cust_pkg;
 use FS::cust_credit_bill;
 use FS::pay_batch;
-use FS::cust_pay_batch;
 use FS::cust_bill_event;
 use FS::cust_event;
 use FS::part_pkg;
 use FS::cust_bill_pay;
-use FS::cust_bill_pay_batch;
 use FS::part_bill_event;
 use FS::payby;
 use FS::bill_batch;
@@ -161,7 +158,7 @@ sub notice_name {
   $self->conf->config('notice_name') || 'Invoice'
 }
 
-sub cust_linked { $_[0]->cust_main_custnum; } 
+sub cust_linked { $_[0]->cust_main_custnum || $_[0]->custnum } 
 sub cust_unlinked_msg {
   my $self = shift;
   "WARNING: can't find cust_main.custnum ". $self->custnum.
@@ -492,7 +489,9 @@ sub cust_bill_pkg {
   qsearch(
     { 'table'    => 'cust_bill_pkg',
       'hashref'  => { 'invnum' => $self->invnum },
-      'order_by' => 'ORDER BY billpkgnum',
+      'order_by' => 'ORDER BY billpkgnum', #important?  otherwise we could use
+                                           # the AUTLOADED FK search.  or should
+                                           # that default to ORDER by the pkey?
     }
   );
 }
@@ -634,13 +633,6 @@ sub num_cust_event {
 
 Returns the customer (see L<FS::cust_main>) for this invoice.
 
-=cut
-
-sub cust_main {
-  my $self = shift;
-  qsearchs( 'cust_main', { 'custnum' => $self->custnum } );
-}
-
 =item cust_suspend_if_balance_over AMOUNT
 
 Suspends the customer associated with this invoice if the total amount owed on
@@ -699,16 +691,6 @@ sub cust_pay {
   #sort { $a->_date <=> $b->_date }
   #  qsearch( 'cust_pay', { 'invnum' => $self->invnum } )
   #;
-}
-
-sub cust_pay_batch {
-  my $self = shift;
-  qsearch('cust_pay_batch', { 'invnum' => $self->invnum } );
-}
-
-sub cust_bill_pay_batch {
-  my $self = shift;
-  qsearch('cust_bill_pay_batch', { 'invnum' => $self->invnum } );
 }
 
 =item cust_bill_pay
@@ -1414,7 +1396,7 @@ sub email {
   my $self = shift;
   return if $self->hide;
   my $conf = $self->conf;
-  my $opt = shift;
+  my $opt = shift || {};
   if ($opt and !ref($opt)) {
     die "FS::cust_bill::email called with positional parameters";
   }
@@ -1489,7 +1471,7 @@ I<notice_name>, if specified, overrides "Invoice" as the name of the sent docume
 sub lpr_data {
   my $self = shift;
   my $conf = $self->conf;
-  my $opt = shift;
+  my $opt = shift || {};
   if ($opt and !ref($opt)) {
     # nobody does this anyway
     die "FS::cust_bill::lpr_data called with positional parameters";
@@ -1515,7 +1497,7 @@ sub print {
   my $self = shift;
   return if $self->hide;
   my $conf = $self->conf;
-  my $opt = shift;
+  my $opt = shift || {};
   if ($opt and !ref($opt)) {
     die "FS::cust_bill::print called with positional parameters";
   }
@@ -1550,7 +1532,7 @@ sub fax_invoice {
   my $self = shift;
   return if $self->hide;
   my $conf = $self->conf;
-  my $opt = shift;
+  my $opt = shift || {};
   if ($opt and !ref($opt)) {
     die "FS::cust_bill::fax_invoice called with positional parameters";
   }

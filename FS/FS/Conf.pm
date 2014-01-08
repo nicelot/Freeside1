@@ -2875,7 +2875,8 @@ and customer address. Include units.',
     'description' => 'If enabled, specifies the type of verification required for self-service password resets.',
     'type'        => 'select',
     'select_hash' => [ '' => 'Password reset disabled',
-                       'paymask,amount,zip' => 'Verify with credit card (or bank account) last 4 digits, payment amount and zip code',
+                       'email' => 'Click on a link in email',
+                       'paymask,amount,zip' => 'Click on a link in email, and also verify with credit card (or bank account) last 4 digits, payment amount and zip code',
                      ],
   },
 
@@ -4279,6 +4280,7 @@ and customer address. Include units.',
                        'usps'     => 'U.S. Postal Service',
                        'ezlocate' => 'EZLocate',
                        'tomtom'   => 'TomTom',
+                       'melissa'  => 'Melissa WebSmart',
                      ],
   },
 
@@ -4315,6 +4317,20 @@ and customer address. Include units.',
     'section'     => 'UI',
     'description' => 'Password for EZ-Locate service.',
     'type'        => 'text'
+  },
+
+  {
+    'key'         => 'melissa-userid',
+    'section'     => 'UI', # it's really not...
+    'description' => 'User ID for Melissa WebSmart service.  See <a href="http://www.melissadata.com/">the Melissa website</a> for access and pricing.',
+    'type'        => 'text',
+  },
+
+  {
+    'key'         => 'melissa-enable_geocoding',
+    'section'     => 'UI',
+    'description' => 'Use the Melissa service for census tract and coordinate lookups.  Enable this only if your subscription includes geocoding access.',
+    'type'        => 'checkbox',
   },
 
   {

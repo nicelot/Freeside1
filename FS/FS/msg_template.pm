@@ -1,8 +1,19 @@
 package FS::msg_template;
+use base qw( FS::Record );
 
 use strict;
-use base qw( FS::Record );
+use vars qw( $DEBUG $conf );
+
+use Date::Format qw( time2str );
+use File::Temp;
+use IPC::Run qw(run);
 use Text::Template;
+
+use HTML::Entities qw( decode_entities encode_entities ) ;
+use HTML::FormatText;
+use HTML::TreeBuilder;
+use Encode;
+
 use FS::Misc qw( generate_email send_email do_print );
 use FS::Conf;
 use FS::Record qw( qsearch qsearchs );
@@ -11,16 +22,6 @@ use FS::UID qw( dbh );
 use FS::cust_main;
 use FS::cust_msg;
 use FS::template_content;
-
-use Date::Format qw( time2str );
-use HTML::Entities qw( decode_entities encode_entities ) ;
-use HTML::FormatText;
-use HTML::TreeBuilder;
-use Encode;
-
-use File::Temp;
-use IPC::Run qw(run);
-use vars qw( $DEBUG $conf );
 
 FS::UID->install_callback( sub { $conf = new FS::Conf; } );
 
@@ -558,6 +559,9 @@ sub substitutions {
       [ company_phonenum  => sub {
           $conf->config('company_phonenum', shift->agentnum)
         } ],
+      [ selfservice_server_base_url => sub { 
+          $conf->config('selfservice_server-base_url') #, shift->agentnum) 
+        } ],
     ],
     # next_bill_date
     'cust_pkg'  => [qw( 
@@ -693,12 +697,12 @@ Returns the L<FS::agent> object for this template.
 
 =cut
 
-sub agent {
-  qsearchs('agent', { 'agentnum' => $_[0]->agentnum });
-}
-
 sub _upgrade_data {
   my ($self, %opts) = @_;
+
+  ###
+  # First move any historical templates in config to real message templates
+  ###
 
   my @fixes = (
     [ 'alerter_msgnum',  'alerter_template',   '',               '', '' ],
@@ -791,6 +795,11 @@ sub _upgrade_data {
     } # if alerter_msgnum
 
   }
+
+  ###
+  # Move subject and body from msg_template to template_content
+  ###
+
   foreach my $msg_template ( qsearch('msg_template', {}) ) {
     if ( $msg_template->subject || $msg_template->body ) {
       # create new default content
@@ -814,6 +823,35 @@ sub _upgrade_data {
       die $error if $error;
     }
   }
+
+  ###
+  # Add new-style default templates if missing
+  ###
+  $self->_populate_initial_data;
+
+}
+
+sub _populate_initial_data { #class method
+  #my($class, %opts) = @_;
+  #my $class = shift;
+
+  eval "use FS::msg_template::InitialData;";
+  die $@ if $@;
+
+  my $initial_data = FS::msg_template::InitialData->_initial_data;
+
+  foreach my $hash ( @$initial_data ) {
+
+    next if $hash->{_conf} && $conf->config( $hash->{_conf} );
+
+    my $msg_template = new FS::msg_template($hash);
+    my $error = $msg_template->insert( @{ $hash->{_insert_args} || [] } );
+    die $error if $error;
+
+    $conf->set( $hash->{_conf}, $msg_template->msgnum ) if $hash->{_conf};
+  
+  }
+
 }
 
 sub eviscerate {

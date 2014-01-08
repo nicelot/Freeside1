@@ -1003,12 +1003,12 @@ sub tables_hashref {
                           { columns    => [ 'billpkgnum' ],
                             table      => 'cust_bill_pkg',
                           },
-                          { columns    => [ 'pkgnum' ],
-                            table      => 'cust_pkg',
-                          },
-                          { columns    => [ 'invnum' ],
-                            table      => 'cust_bill',
-                          },
+                          #{ columns    => [ 'pkgnum' ],
+                          #  table      => 'cust_pkg',
+                          #},
+                          #{ columns    => [ 'invnum' ],
+                          #  table      => 'cust_bill',
+                          #},
                           { columns    => [ 'classnum' ],
                             table      => 'usage_class',
                           },
@@ -1176,12 +1176,12 @@ sub tables_hashref {
                           { columns    => [ 'billpkgnum' ],
                             table      => 'cust_bill_pkg_void',
                           },
-                          { columns    => [ 'pkgnum' ],
-                            table      => 'cust_pkg',
-                          },
-                          { columns    => [ 'invnum' ],
-                            table      => 'cust_bill',
-                          },
+                          #{ columns    => [ 'pkgnum' ],
+                          #  table      => 'cust_pkg',
+                          #},
+                          #{ columns    => [ 'invnum' ],
+                          #  table      => 'cust_bill',
+                          #},
                           { columns    => [ 'classnum' ],
                             table      => 'usage_class',
                           },
@@ -1672,7 +1672,10 @@ sub tables_hashref {
         'first',     'varchar',     '', $char_d, '', '', 
         'title',     'varchar', 'NULL', $char_d, '', '', #eg Head Bottle Washer
         'comment',   'varchar', 'NULL',     255, '', '', 
-        'disabled',     'char', 'NULL',       1, '', '', 
+        'selfservice_access',    'char', 'NULL',       1, '', '',
+        '_password',          'varchar', 'NULL', $char_d, '', '',
+        '_password_encoding', 'varchar', 'NULL', $char_d, '', '',
+        'disabled',              'char', 'NULL',       1, '', '', 
       ],
       'primary_key'  => 'contactnum',
       'unique'       => [],
@@ -1736,7 +1739,8 @@ sub tables_hashref {
         'emailaddress',   'varchar', '', $char_d, '', '',
       ],
       'primary_key'  => 'contactemailnum',
-      'unique'       => [ [ 'contactnum', 'emailaddress' ], ],
+      #'unique'       => [ [ 'contactnum', 'emailaddress' ], ],
+      'unique'       => [ [ 'emailaddress' ], ],
       'index'        => [],
       'foreign_keys' => [
                           { columns    => [ 'contactnum' ],
@@ -2925,7 +2929,7 @@ sub tables_hashref {
                         ],
     },
 
-   'part_pkg' => {
+    'part_pkg' => {
       'columns' => [
         'pkgpart',       'serial',    '',   '', '', '', 
         'pkg',           'varchar',   '',   $char_d, '', '', 
@@ -3031,6 +3035,26 @@ sub tables_hashref {
       'primary_key' => 'currencyratenum',
       'unique'      => [ [ 'from_currency', 'to_currency' ] ],
       'index'       => [],
+    },
+
+    'part_pkg_usageprice' => {
+      'columns' => [
+        'usagepricepart', 'serial',      '',      '', '', '',
+        'pkgpart',           'int',      '',      '', '', '',
+        'price',          @money_type,                '', '', 
+        'currency',         'char',  'NULL',       3, '', '',
+        'action',        'varchar',      '', $char_d, '', '',
+        'target',        'varchar',      '', $char_d, '', '',
+        'amount',        'varchar',      '', $char_d, '', '',
+      ],
+      'primary_key'  => 'usagepricepart',
+      'unique'       => [ [ 'pkgpart', 'currency', 'target' ] ],
+      'index'        => [ [ 'pkgpart' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'pkgpart' ],
+                            table      => 'part_pkg',
+                          },
+                        ],
     },
 
     'part_pkg_link' => {
@@ -3657,8 +3681,8 @@ sub tables_hashref {
         'classname', 'varchar', '', $char_d, '', '',
       ],
       'primary_key' => 'classnum',
-      'unique' => [ ],
-      'index'  => [ ],
+      'unique' => [],
+      'index'  => [],
     },
 
     'hardware_type' => {
@@ -3685,8 +3709,8 @@ sub tables_hashref {
         'disabled',    'char', 'NULL',   1, '', '', 
       ],
       'primary_key' => 'statusnum',
-      'unique' => [ ],
-      'index'  => [ ],
+      'unique' => [],
+      'index'  => [],
     },
 
     'domain_record' => {
@@ -3891,7 +3915,8 @@ sub tables_hashref {
       'index'        => [],
       'foreign_keys' => [
                           { columns    => [ 'svcnum' ],
-                            table      => 'svc_broadband',
+                            table      => 'svc_broadband',#no? could be _acct?
+                                                          #remove or cust_svc?
                           },
                         ],
     },
@@ -6049,6 +6074,78 @@ sub tables_hashref {
       'primary_key' => 'providernum',
       'unique' => [ [ 'provider' ], ],
       'index'  => [],
+    },
+
+    'svc_conferencing' => {
+      'columns' => [
+        'svcnum',            'int',     '',      '', '', '',
+        'conf_id',           'int', 'NULL',      '', '', '', #"system assigned"
+        'conf_name',     'varchar',     '', $char_d, '', '',
+        'conf_password', 'varchar',     '', $char_d, '', '',
+        'access_code',   'varchar',     '',      16, '', '',
+        'duration',          'int',     '',      '', '', '',
+        'participants',      'int',     '',      '', '', '',
+        'conftypenum',       'int',     '',      '', '', '',
+        'confqualitynum',    'int',     '',      '', '', '',
+        'opt_recording',    'char', 'NULL',       1, '', '',
+        'opt_sip',          'char', 'NULL',       1, '', '',
+        'opt_phone',        'char', 'NULL',       1, '', '',
+      ],
+      'primary_key' => 'svcnum',
+      'unique' => [],
+      'index'  => [],
+      'foreign_keys' => [
+                          { columns => [ 'svcnum' ],
+                            table   => 'cust_svc',
+                          },
+                          { columns => [ 'conftypenum' ],
+                            table   => 'conferencing_type',
+                          },
+                          { columns => [ 'confqualitynum' ],
+                            table   => 'conferencing_quality',
+                          },
+                        ],
+    },
+
+    'conferencing_type' => {
+      'columns' => [
+        'conftypenum',  'int',     '',      '', '', '',
+        'typeid'      , 'int',     '',      '', '', '',
+        'typename', 'varchar',     '', $char_d, '', '',
+        'disabled',    'char', 'NULL',       1, '', '', 
+      ],
+      'primary_key' => 'conftypenum',
+      'unique'      => [ [ 'typeid', 'disabled' ], [ 'typename', 'disabled' ] ],
+      'index'       => [],
+    },
+
+    'conferencing_quality' => {
+      'columns' => [
+        'confqualitynum',  'int',     '',      '', '', '',
+        'qualityid'      , 'int',     '',      '', '', '',
+        'qualityname', 'varchar',     '', $char_d, '', '',
+        'disabled',       'char', 'NULL',       1, '', '', 
+      ],
+      'primary_key' => 'confqualitynum',
+      'unique'      => [ [ 'qualityid', 'disabled' ], [ 'qualityname', 'disabled' ] ],
+      'index'       => [],
+    },
+
+    'svc_video' => {
+      'columns' => [
+        'svcnum',            'int', '', '', '', '',
+        'smartcard_num', 'varchar', '', 16, '', '',
+        'mac_addr',      'varchar', '', 12, '', '', 
+        'duration',          'int', '', '', '', '',
+      ],
+      'primary_key' => 'svcnum',
+      'unique' => [], # [ 'smartcard_num' ], [ 'mac_addr' ], ],
+      'index'  => [],
+      'foreign_keys' => [
+                          { columns => [ 'svcnum' ],
+                            table   => 'cust_svc',
+                          },
+                        ],
     },
 
     'vend_main' => {

@@ -1,7 +1,7 @@
 package FS::cust_credit;
+use base qw( FS::otaker_Mixin FS::cust_main_Mixin FS::Record );
 
 use strict;
-use base qw( FS::otaker_Mixin FS::cust_main_Mixin FS::Record );
 use vars qw( $conf $unsuspendauto $me $DEBUG
              $otaker_upgrade_kludge $ignore_empty_reasonnum
            );
@@ -11,7 +11,6 @@ use FS::UID qw( dbh );
 use FS::Misc qw(send_email);
 use FS::Record qw( qsearch qsearchs dbdef );
 use FS::CurrentUser;
-use FS::cust_main;
 use FS::cust_pkg;
 use FS::cust_refund;
 use FS::cust_credit_bill;
@@ -124,7 +123,7 @@ Creates a new credit.  To add the credit to the database, see L<"insert">.
 =cut
 
 sub table { 'cust_credit'; }
-sub cust_linked { $_[0]->cust_main_custnum; } 
+sub cust_linked { $_[0]->cust_main_custnum || $_[0]->custnum } 
 sub cust_unlinked_msg {
   my $self = shift;
   "WARNING: can't find cust_main.custnum ". $self->custnum.
@@ -447,14 +446,6 @@ sub credited {
 =item cust_main
 
 Returns the customer (see L<FS::cust_main>) for this credit.
-
-=cut
-
-sub cust_main {
-  my $self = shift;
-  qsearchs( 'cust_main', { 'custnum' => $self->custnum } );
-}
-
 
 =item reason
 

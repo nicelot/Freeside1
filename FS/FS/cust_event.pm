@@ -1,11 +1,10 @@
 package FS::cust_event;
+use base qw( FS::cust_main_Mixin FS::Record );
 
 use strict;
-use base qw( FS::cust_main_Mixin FS::Record );
-use vars qw( @ISA $DEBUG $me );
+use vars qw( $DEBUG $me );
 use Carp qw( croak confess );
 use FS::Record qw( qsearch qsearchs dbdef );
-use FS::part_event;
 #for cust_X
 use FS::cust_main;
 use FS::cust_pkg;
@@ -74,7 +73,7 @@ points to.  You can ask the object for a copy with the I<hash> method.
 
 sub table { 'cust_event'; }
 
-sub cust_linked { $_[0]->cust_main_custnum; } 
+sub cust_linked { $_[0]->cust_main_custnum || $_[0]->custnum } 
 sub cust_unlinked_msg {
   my $self = shift;
   "WARNING: can't find cust_main.custnum ". $self->custnum;
@@ -150,13 +149,6 @@ sub check {
 =item part_event
 
 Returns the event definition (see L<FS::part_event>) for this completed event.
-
-=cut
-
-sub part_event {
-  my $self = shift;
-  qsearchs( 'part_event', { 'eventpart' => $self->eventpart } );
-}
 
 =item cust_X
 
@@ -487,9 +479,15 @@ sub re_X {
     my $cust_X = $cust_event->cust_X; # cust_bill
     next unless $cust_X->can($method);
 
-    $cust_X->$method( $cust_event->part_event->templatename
-                      || $cust_X->agent_template
-                    );
+    my $part_event = $cust_event->part_event;
+    my $template = $part_event->templatename
+                   || $cust_X->agent_template;
+    my $modenum = $part_event->option('modenum') || '';
+    my $invoice_from = $part_event->option('agent_invoice_from') || '';
+    $cust_X->set('mode' => $modenum);
+    $cust_X->$method( { template      => $template,
+                        modenum       => $modenum,
+                        invoice_from  => $invoice_from } );
 
     if ( $job ) { #progressbar foo
       $num++;

@@ -3,7 +3,7 @@ use base qw( Exporter );
 
 use strict;
 use vars qw( $AUTOLOAD
-             %virtual_fields_cache
+             %virtual_fields_cache %fk_method_cache
              $money_char $lat_lower $lon_upper
            );
 use Carp qw(carp cluck croak confess);
@@ -78,6 +78,10 @@ FS::UID->install_callback( sub {
   }
 
   $cached = FS::UID::get_cached;
+  foreach my $table ( dbdef->tables ) {
+    $fk_method_cache{$table} = fk_methods($table);
+  }
+
 } );
 
 =head1 NAME
@@ -970,6 +974,11 @@ $record->column is a synonym for $record->get('column');
 
 $record->column('value') is a synonym for $record->set('column','value');
 
+$record->foreign_table_name calls qsearchs and returns a single
+FS::foreign_table record (for tables referenced by a column of this table) or
+qsearch and returns an array of FS::foreign_table records (for tables
+referenced by a column in the foreign table).
+
 =cut
 
 # readable/safe
@@ -978,14 +987,34 @@ sub AUTOLOAD {
   my($field)=$AUTOLOAD;
   $field =~ s/.*://;
 
-  if ( defined($value) ) {
-    confess "errant AUTOLOAD $field for $self (arg $value)"
-      unless blessed($self) && $self->can('setfield');
-  } else {
-    confess "errant AUTOLOAD $field for $self (no args)"
-      unless blessed($self) && $self->can('getfield');
-  }
+  confess "errant AUTOLOAD $field for $self (arg $value)"
+    unless blessed($self) && $self->can('setfield');
 
+  #$fk_method_cache{$self->table} ||= fk_methods($self->table);
+  if ( exists($fk_method_cache{$self->table}->{$field}) ) {
+
+    my $fk_info = $fk_method_cache{$self->table}->{$field};
+    my $method = $fk_info->{method} || 'qsearchs';
+    my $table = $fk_info->{table} || $field;
+    my $column = $fk_info->{column};
+    my $foreign_column = $fk_info->{references} || $column;
+
+    eval "use FS::$table";
+    die $@ if $@;
+
+    my $pkey_value = $self->$column();
+    my %search = ( $foreign_column => $pkey_value );
+
+    # FS::Record->$method() ?  they're actually just subs :/
+    if ( $method eq 'qsearchs' ) { 
+      return $pkey_value ? qsearchs( $table, \%search ) : '';
+    } elsif ( $method eq 'qsearch' ) {
+      return $pkey_value ? qsearch(  $table, \%search ) : ();
+    } else {
+      die "unknown method $method";
+    }
+
+  }
   # autoload is SLOW, lets push an actual sub in to make this 3x faster in future calls
   no strict 'refs'; ## no critic
   my $method = (ref $self).'::'.$field;
@@ -1002,7 +1031,7 @@ sub AUTOLOAD {
   $self->$field($value);
 }
 
-# efficient
+# efficient (also, old, doesn't support FK stuff)
 #sub AUTOLOAD {
 #  my $field = $AUTOLOAD;
 #  $field =~ s/.*://;
@@ -1012,6 +1041,72 @@ sub AUTOLOAD {
 #    $_[0]->getfield($field);
 #  }    
 #}
+
+sub fk_methods {
+  my $table = shift;
+
+  my %hash = ();
+
+  # foreign keys we reference in other tables
+  foreach my $fk (dbdef->table($table)->foreign_keys) {
+
+    my $method = '';
+    if ( scalar( @{$fk->columns} ) == 1 ) {
+      if ( ! @{$fk->references} || $fk->columns->[0] eq $fk->references->[0] ){
+        $method = $fk->table;
+      } else {
+        #some sort of hint in the table.pm or schema for methods not named
+        # after their foreign table (well, not a whole lot different than
+        # just providing a small subroutine...)
+      }
+
+      if ( $method ) {
+        $hash{$method} = { #fk_info
+                           'method' => 'qsearchs',
+                           'column' => $fk->columns->[0],
+                           #'references' => $fk->references->[0],
+                         };
+      }
+
+    }
+
+  }
+
+  # foreign keys referenced in other tables to us
+  #  (alas.  why we're cached.  still, might this loop better be done once at
+  #   schema load time insetad of every time we AUTOLOAD a method on a new
+  #   class?)
+  foreach my $f_table ( dbdef->tables ) {
+    foreach my $fk (dbdef->table($f_table)->foreign_keys) {
+
+      next unless $fk->table eq $table;
+
+      my $method = '';
+      if ( scalar( @{$fk->columns} ) == 1 ) {
+        if ( ! @{$fk->references} || $fk->columns->[0] eq $fk->references->[0] ){
+          $method = $f_table;
+        } else {
+          #some sort of hint in the table.pm or schema for methods not named
+          # after their foreign table (well, not a whole lot different than
+          # just providing a small subroutine...)
+        }
+
+        if ( $method ) {
+          $hash{$method} = { #fk_info
+                             'method' => 'qsearch',
+                             'column' => $fk->columns->[0], #references||column
+                             #'references' => $fk->column->[0],
+                           };
+        }
+
+      }
+
+    }
+
+  }
+
+  \%hash;
+}
 
 =item hash
 
@@ -1573,7 +1668,7 @@ sub rep {
 =item check
 
 Checks custom fields. Subclasses should still provide a check method to validate
-non-custom fields, foreign keys, etc., and call this method via $self->SUPER::check.
+non-custom fields, etc., and call this method via $self->SUPER::check.
 
 =cut
 

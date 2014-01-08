@@ -2774,12 +2774,12 @@ the results.
 sub cust_svc {
   my $self = shift;
   cluck "cust_pkg->cust_svc called" if $DEBUG > 2;
-  $self->_sort_cust_svc( $self->cust_svc_unsorted_arrayref );
+  $self->_sort_cust_svc( $self->cust_svc_unsorted_arrayref(@_) );
 }
 
 sub cust_svc_unsorted {
   my $self = shift;
-  @{ $self->cust_svc_unsorted_arrayref };
+  @{ $self->cust_svc_unsorted_arrayref(@_) };
 }
 
 sub cust_svc_unsorted_arrayref {
@@ -3337,13 +3337,6 @@ sub _labels_short {
 
 Returns the parent customer object (see L<FS::cust_main>).
 
-=cut
-
-sub cust_main {
-  my $self = shift;
-  qsearchs( 'cust_main', { 'custnum' => $self->custnum } );
-}
-
 =item balance
 
 Returns the balance for this specific package, when using
@@ -3889,13 +3882,6 @@ sub recharge {
 
 =item cust_pkg_discount
 
-=cut
-
-sub cust_pkg_discount {
-  my $self = shift;
-  qsearch('cust_pkg_discount', { 'pkgnum' => $self->pkgnum } );
-}
-
 =item cust_pkg_discount_active
 
 =cut
@@ -3908,13 +3894,6 @@ sub cust_pkg_discount_active {
 =item cust_pkg_usage
 
 Returns a list of all voice usage counters attached to this package.
-
-=cut
-
-sub cust_pkg_usage {
-  my $self = shift;
-  qsearch('cust_pkg_usage', { pkgnum => $self->pkgnum });
-}
 
 =item apply_usage OPTIONS
 

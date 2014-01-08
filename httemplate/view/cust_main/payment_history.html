@@ -12,7 +12,7 @@
                'action'      => "${p}edit/cust_pay.cgi?popup=1;payby=BILL",
                'cust_main'   => $cust_main,
                'actionlabel' => emt('Enter check payment'),
-               'width'       => 392,
+               'width'       => ( $opt{'pkg-balances'} ? 763 : 392),
                'height'      => 392,
   &>
 % } 
@@ -24,7 +24,7 @@
                'action'      => "${p}edit/cust_pay.cgi?popup=1;payby=CASH",
                'cust_main'   => $cust_main,
                'actionlabel' => emt('Enter cash payment'),
-               'width'       => 392,
+               'width'       => ( $opt{'pkg-balances'} ? 763 : 392),
                'height'      => 392,
   &>
 % } 
@@ -70,7 +70,7 @@
                'action'      => "${p}edit/cust_credit.cgi",
                'cust_main'   => $cust_main,
                'actionlabel' => emt('Enter credit'),
-               'width'       => 616, #make room for reasons #540 default
+               'width'       => ( $opt{'pkg-balances'} ? 763 : 616),
   &>
 % }
 % if ( $curuser->access_right('Credit line items') ) { 
@@ -616,13 +616,18 @@ sub translate_payinfo {
     my $payby = $object->payby;
     my $payinfo = $object->payinfo;
 
-    my $conf = new FS::Conf;
-
     if ( $payby eq 'CARD' ) {
         $payinfo = $object->paymask;
     } elsif ( $payby eq 'CHEK' ) {
+        #false laziness w/payinfo_Mixin::payby_payinfo_pretty, should use that
         my( $account, $aba ) = split('@', $object->paymask );
-        $payinfo = emt("ABA [_1], Acct #[_2]",$aba,$account);
+        if ( $aba =~ /^(\d{5})\.(\d{3})$/ ) { #blame canada
+          my($branch, $routing) = ($1, $2);
+          $payinfo = emt("Routing [_1], Branch [_2], Acct [_3]",
+                         $routing, $branch, $account);
+        } else {
+          $payinfo = emt("Routing [_1], Acct [_2]", $aba, $account);
+        }
     }
 
     ($payby,$payinfo);

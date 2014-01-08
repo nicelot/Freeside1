@@ -210,7 +210,25 @@ L<FS::svc_dish> - Dish network service class
 
 L<FS::svc_cable> - Cable service class
 
-L<FS::cable_model> - Cable-model model class
+L<FS::cable_model> - Cable-modem model class
+
+L<FS::cable_provider> - Cable provider class
+
+L<FS::svc_alarm> - Alarm service class
+
+L<FS::alarm_system> - Alarm system class
+
+L<FS::alarm_type> - Alarm type (inputs and outputs) class
+
+L<FS::alarm_station> - Alarm central station class
+
+L<FS::svc_conferencing> - Conferencing service class
+
+L<FS::conferencing_type> - Conferencing type class
+
+L<FS::conferencing_quality> - Conferencing quality class
+
+L<FS::svc_video> - Video (IPTV/video-on-demand) service class
 
 L<FS::inventory_class> - Inventory classes
 
@@ -236,6 +254,8 @@ L<FS::pkg_class> - Package class class
 L<FS::part_pkg> - Package definition class
 
 L<FS::part_pkg_msgcat> - Package definition localization class
+
+L<FS::part_pkg_usageprice> - Package definition usage pricing add-on class
 
 L<FS::part_pkg_currency> - Package definition local currency prices
 

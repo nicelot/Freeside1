@@ -1,10 +1,9 @@
 package FS::cust_main;
-
-require 5.006;
-use strict;
-use base qw( FS::cust_main::Packages FS::cust_main::Status
+use base qw( FS::cust_main::Packages
+             FS::cust_main::Status
              FS::cust_main::NationalID
-             FS::cust_main::Billing FS::cust_main::Billing_Realtime
+             FS::cust_main::Billing
+             FS::cust_main::Billing_Realtime
              FS::cust_main::Billing_Discount
              FS::cust_main::Billing_ThirdParty
              FS::cust_main::Location
@@ -13,6 +12,9 @@ use base qw( FS::cust_main::Packages FS::cust_main::Status
              FS::o2m_Common
              FS::Record
            );
+
+require 5.006;
+use strict;
 use vars qw( $DEBUG $me $conf
              @encrypted_fields
              $import
@@ -60,7 +62,6 @@ use FS::cust_class;
 use FS::cust_main_exemption;
 use FS::cust_tax_adjustment;
 use FS::cust_tax_location;
-use FS::agent;
 use FS::agent_currency;
 use FS::cust_main_invoice;
 use FS::cust_tag;
@@ -2110,7 +2111,7 @@ Returns all locations (see L<FS::cust_location>) for this customer.
 
 sub cust_location {
   my $self = shift;
-  qsearch('cust_location', { 'custnum' => $self->custnum,
+  qsearch('cust_location', { 'custnum'     => $self->custnum,
                              'prospectnum' => '' } );
 }
 
@@ -2340,13 +2341,6 @@ sub notes {
 
 Returns the agent (see L<FS::agent>) for this customer.
 
-=cut
-
-sub agent {
-  my $self = shift;
-  qsearchs( 'agent', { 'agentnum' => $self->agentnum } );
-}
-
 =item agent_name
 
 Returns the agent name (see L<FS::agent>) for this customer.
@@ -2362,13 +2356,6 @@ sub agent_name {
 
 Returns any tags associated with this customer, as FS::cust_tag objects,
 or an empty list if there are no tags.
-
-=cut
-
-sub cust_tag {
-  my $self = shift;
-  qsearch('cust_tag', { 'custnum' => $self->custnum } );
-}
 
 =item part_tag
 
@@ -2387,17 +2374,6 @@ sub part_tag {
 
 Returns the customer class, as an FS::cust_class object, or the empty string
 if there is no customer class.
-
-=cut
-
-sub cust_class {
-  my $self = shift;
-  if ( $self->classnum ) {
-    qsearchs('cust_class', { 'classnum' => $self->classnum } );
-  } else {
-    return '';
-  } 
-}
 
 =item categoryname 
 
@@ -3071,13 +3047,6 @@ sub tax_exemption {
 }
 
 =item cust_main_exemption
-
-=cut
-
-sub cust_main_exemption {
-  my $self = shift;
-  qsearch( 'cust_main_exemption', { 'custnum' => $self->custnum } );
-}
 
 =item invoicing_list [ ARRAYREF ]
 
