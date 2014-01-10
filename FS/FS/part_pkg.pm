@@ -660,7 +660,7 @@ sub check {
 
   my $error = $self->ut_numbern('pkgpart')
     || $self->ut_text('pkg')
-    || $self->ut_text('comment')
+    || $self->ut_textn('comment')
     || $self->ut_textn('promo_code')
     || $self->ut_alphan('plan')
     || $self->ut_enum('setuptax', [ '', 'Y' ] )
@@ -824,7 +824,8 @@ sub pkg_comment {
   #$self->pkg. ' - '. $self->comment;
   #$self->pkg. ' ('. $self->comment. ')';
   my $pre = $opt{nopkgpart} ? '' : $self->pkgpart. ': ';
-  $pre. $self->pkg. ' - '. $self->custom_comment;
+  my $custom_comment = $self->custom_comment(%opt);
+  $pre. $self->pkg. ( $custom_comment ? " - $custom_comment" : '' );
 }
 
 sub price_info { # safety, in case a part_pkg hasn't defined price_info
@@ -833,7 +834,11 @@ sub price_info { # safety, in case a part_pkg hasn't defined price_info
 
 sub custom_comment {
   my $self = shift;
-  ( $self->custom ? '(CUSTOM) ' : '' ). $self->comment . ' ' . $self->price_info;
+  my $price_info = $self->price_info(@_);
+  ( $self->custom ? '(CUSTOM) ' : '' ).
+    $self->comment.
+    ( ($self->custom || $self->comment) ? ' - ' : '' ).
+    ($price_info || 'No charge');
 }
 
 =item pkg_class
@@ -1063,6 +1068,10 @@ sub can_discount { 0; }
  
 # whether the plan allows changing the start date
 sub can_start_date { 1; }
+
+# whether the plan supports part_pkg_usageprice add-ons (a specific kind of
+#  pre-selectable usage pricing, there's others this doesn't refer to)
+sub can_usageprice { 0; }
   
 # the delay start date if present
 sub delay_start_date {

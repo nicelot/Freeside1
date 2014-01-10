@@ -2933,7 +2933,7 @@ sub tables_hashref {
       'columns' => [
         'pkgpart',       'serial',    '',   '', '', '', 
         'pkg',           'varchar',   '',   $char_d, '', '', 
-        'comment',       'varchar',   '', 2*$char_d, '', '', 
+        'comment',       'varchar', 'NULL', 2*$char_d, '', '', 
         'promo_code',    'varchar', 'NULL', $char_d, '', '', 
         'freq',          'varchar',   '',   $char_d, '', '', #billing frequency
         'setuptax',      'char', 'NULL', 1, '', '', 
@@ -3053,6 +3053,26 @@ sub tables_hashref {
       'foreign_keys' => [
                           { columns    => [ 'pkgpart' ],
                             table      => 'part_pkg',
+                          },
+                        ],
+    },
+
+    'cust_pkg_usageprice' => {
+      'columns' => [
+        'usagepricenum', 'serial',      '',      '', '', '',
+        'pkgnum',           'int',      '',      '', '', '',
+        'usagepricepart',   'int',      '',      '', '', '',
+        'quantity',         'int',      '',      '', '', '',
+      ],
+      'primary_key'  => 'usagepricenum',
+      'unique'       => [ [ 'pkgnum', 'usagepricepart' ] ],
+      'index'        => [ [ 'pkgnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'pkgnum' ],
+                            table      => 'cust_pkg',
+                          },
+                          { columns    => [ 'usagepricepart' ],
+                            table      => 'part_pkg_usageprice',
                           },
                         ],
     },

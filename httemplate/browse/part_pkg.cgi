@@ -277,6 +277,20 @@ push @fields, sub {
         : ()
       ),
     ],
+    (
+      map { my $amount = $_->amount / ($_->target_info->{multiplier} || 1);
+            my $label = $_->target_info->{label};
+            [
+              { data    => "Plus&nbsp;$money_char". $_->price. '&nbsp;'.
+                           ( $_->action eq 'increment' ? 'per' : 'for' ).
+                           "&nbsp;$amount&nbsp;$label",
+                align   => 'center', #left?
+                colspan => 2,
+              },
+            ];
+          }
+        $part_pkg->part_pkg_usageprice
+    ),
     ( map { my $dst_pkg = $_->dst_pkg;
             [
               { data => 'Supplemental: &nbsp;'.
