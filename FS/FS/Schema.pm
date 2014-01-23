@@ -988,7 +988,7 @@ sub tables_hashref {
         'format',  'char', 'NULL', 1, '', '',
         'classnum', 'int', 'NULL', '', '', '',
         'duration', 'int', 'NULL', '',  0, '',
-        'phonenum', 'varchar', 'NULL', 25, '', '',
+        'phonenum', 'varchar', 'NULL', 255, '', '', # has to hold a service label
         'accountcode', 'varchar',  'NULL',      20, '', '',
         'startdate',  @date_type, '', '', 
         'regionname', 'varchar', 'NULL', $char_d, '', '',
@@ -1163,7 +1163,7 @@ sub tables_hashref {
         'format',  'char', 'NULL', 1, '', '',
         'classnum', 'int', 'NULL', '', '', '',
         'duration', 'int', 'NULL', '',  0, '',
-        'phonenum', 'varchar', 'NULL', 25, '', '',
+        'phonenum', 'varchar', 'NULL', 255, '', '',
         'accountcode', 'varchar',  'NULL',      20, '', '',
         'startdate',  @date_type, '', '', 
         'regionname', 'varchar', 'NULL', $char_d, '', '',
@@ -1285,11 +1285,12 @@ sub tables_hashref {
         'commission_agentnum', 'int', 'NULL', '', '', '', #
         'commission_salesnum', 'int', 'NULL', '', '', '', #
         'commission_pkgnum',   'int', 'NULL', '', '', '', #
+        'credbatch',    'varchar', 'NULL', $char_d, '', '',
       ],
       'primary_key'  => 'crednum',
       'unique'       => [],
       'index'        => [ ['custnum'], ['_date'], ['usernum'], ['eventnum'],
-                          ['commission_salesnum'],
+                          ['commission_salesnum'], ['credbatch'],
                         ],
       'foreign_keys' => [
                           { columns    => [ 'custnum' ],
@@ -5657,6 +5658,25 @@ sub tables_hashref {
                         ],
     },
 
+    'pbx_extension' => {
+      'columns' => [
+        'extensionnum',  'serial',     '',      '', '', '',
+        'svcnum',           'int',     '',      '', '', '',
+        'extension',    'varchar',     '', $char_d, '', '',
+        'pin',          'varchar', 'NULL', $char_d, '', '',
+        'sip_password', 'varchar', 'NULL', $char_d, '', '',
+        'phone_name',   'varchar', 'NULL', $char_d, '', '',
+      ],
+      'primary_key'  => 'extensionnum',
+      'unique'       => [ [ 'svcnum', 'extension' ] ],
+      'index'        => [ [ 'svcnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'svc_pbx',
+                          },
+                        ],
+    },
+
     'svc_mailinglist' => { #svc_group?
       'columns' => [
         'svcnum',            'int',     '',            '', '', '', 
@@ -6311,21 +6331,9 @@ sub tables_hashref {
         'latexnotes',           'text',     'NULL', '', '', '',
         'latexfooter',          'text',     'NULL', '', '', '',
         'latexsummary',         'text',     'NULL', '', '', '',
-        'latexcoupon',          'text',     'NULL', '', '', '',
         'latexsmallfooter',     'text',     'NULL', '', '', '',
         'latexreturnaddress',   'text',     'NULL', '', '', '',
-        'latextopmargin',       'varchar',  'NULL', 16, '', '',
-        'latexheadsep',         'varchar',  'NULL', 16, '', '',
-        'latexaddresssep',      'varchar',  'NULL', 16, '', '',
-        'latextextheight',      'varchar',  'NULL', 16, '', '',
-        'latexextracouponspace','varchar',  'NULL', 16, '', '',
-        'latexcouponfootsep',   'varchar',  'NULL', 16, '', '',
-        'latexcouponamountenclosedsep', 'varchar',  'NULL', 16, '', '',
-        'latexcoupontoaddresssep',      'varchar',  'NULL', 16, '', '',
-        'latexverticalreturnaddress',      'char',  'NULL',  1, '', '',
-        'latexcouponaddcompanytoaddress',  'char',  'NULL',  1, '', '',
-        'logo_png',             'blob',     'NULL', '', '', '',
-        'logo_eps',             'blob',     'NULL', '', '', '',
+        'with_latexcoupon',     'char',     'NULL', '1', '', '',
         'lpr',                  'varchar',  'NULL', $char_d, '', '',
       ],
       'primary_key'  => 'confnum',

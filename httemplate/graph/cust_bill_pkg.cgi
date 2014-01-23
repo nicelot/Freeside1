@@ -103,7 +103,7 @@ if ( $cgi->param('class_mode') eq 'report' ) {
   $value_col = 'classnum';
 }
 
-my @classnums = grep /^\d+$/, $cgi->param($class_param);
+my @classnums = sort {$a <=> $b} grep /^\d+$/, $cgi->param($class_param);
 my @classnames = map { if ( $_ ) {
                          my $class = qsearchs($class_table, {$value_col=>$_} );
                          $class->$name_col;
@@ -128,22 +128,22 @@ if ( $cgi->param('class_agg_break') eq 'aggregate' or
   if ( $cgi->param('class_mode') eq 'report' ) {
     # The new way:
     # Actually break down all subsets of the (selected) report classes.
-    my $powerset = sub {
-      my @set = [];
-      foreach my $x (@_) {
-        @set = map { $_, [ @$_, $x ] } @set;
+    my @subsets = FS::part_pkg_report_option->subsets(@classnums);
+    my @classnum_space = @classnums;
+    @classnums = @classnames = ();
+    while(@subsets) {
+      my $these = shift @subsets;
+      # applied topology!
+      my $not_these = [ @classnum_space ];
+      my $i = 0;
+      foreach (@$these) {
+        $i++ until $not_these->[$i] == $_;
+        splice(@$not_these, $i, 1);
       }
-      @set;
-    };
-    @classnums = $powerset->(@classnums);
-    @classnames = $powerset->(@classnames);
-    # this is pairwise complementary to @classnums, because math
-    @not_classnums = reverse(@classnums);
-warn Dumper(\@classnums, \@classnames, \@not_classnums);
-    # remove the null set
-    shift @classnums;
-    shift @classnames;
-    shift @not_classnums;
+      push @classnums, $these;
+      push @not_classnums, $not_these;
+      push @classnames, shift @subsets;
+    } #while subsets
   }
   # else it's 'pkg', i.e. part_pkg.classnum, which is singular on pkgpart
   # and much simpler
@@ -254,12 +254,17 @@ foreach my $agent ( $all_agent || $sel_agent || $FS::CurrentUser::CurrentUser->a
 
     } elsif ( $cgi->param('class_agg_break') eq 'breakdown' ) {
 
-      # if we're working with report options, @classnums here contains 
-      # arrays of multiple classnums
       for (my $i = 0; $i < scalar @classnums; $i++) {
-        my $row_classnum = join(',', @{ $classnums[$i] });
-        my $row_classname = join(', ', @{ $classnames[$i] });
-        my $not_row_classnum = join(',', @{ $not_classnums[$i] });
+        my $row_classnum = $classnums[$i];
+        my $row_classname = $classnames[$i];
+        my $not_row_classnum = '';
+        if ( $class_param eq 'report_optionnum' ) {
+          # if we're working with report options, @classnums here contains 
+          # arrays of multiple classnums
+          $row_classnum = join(',', @$row_classnum);
+          $row_classname = join(', ', @$row_classname);
+          $not_row_classnum = join(',', @{ $not_classnums[$i] });
+        }
         foreach my $component ( @components ) {
 
           push @items, 'cust_bill_pkg';

@@ -259,10 +259,20 @@ sub insert {
   my %part_pkg_currency = %{ $options{'part_pkg_currency'} || {} };
   foreach my $key ( keys %part_pkg_currency ) {
     $key =~ /^(.+)_([A-Z]{3})$/ or next;
+    my( $optionname, $currency ) = ( $1, $2 );
+    if ( $part_pkg_currency{$key} =~ /^\s*$/ ) {
+      if ( $self->option($optionname) == 0 ) {
+        $part_pkg_currency{$key} = '0';
+      } else {
+        $dbh->rollback if $oldAutoCommit;
+        ( my $thing = $optionname ) =~ s/_/ /g;
+        return ucfirst($thing). " $currency is required";
+      }
+    }
     my $part_pkg_currency = new FS::part_pkg_currency {
       'pkgpart'     => $self->pkgpart,
-      'optionname'  => $1,
-      'currency'    => $2,
+      'optionname'  => $optionname,
+      'currency'    => $currency,
       'optionvalue' => $part_pkg_currency{$key},
     };
     my $error = $part_pkg_currency->insert;
@@ -839,6 +849,11 @@ sub custom_comment {
     $self->comment.
     ( ($self->custom || $self->comment) ? ' - ' : '' ).
     ($price_info || 'No charge');
+}
+
+sub pkg_price_info {
+  my $self = shift;
+  $self->pkg. ' - '. ($self->price_info || 'No charge');
 }
 
 =item pkg_class

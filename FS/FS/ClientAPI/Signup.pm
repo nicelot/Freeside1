@@ -175,6 +175,7 @@ sub signup_info {
       'card_types'         => card_types(),
       'paytypes'           => [ @FS::cust_main::paytypes ],
       'cvv_enabled'        => 1,
+      'require_cvv'        => $conf->exists('signup-require_cvv'),
       'stateid_enabled'    => $conf->exists('show_stateid'),
       'paystate_enabled'   => $conf->exists('show_bankstate'),
       'ship_enabled'       => 1,
@@ -632,6 +633,11 @@ sub new_customer {
       if $gw && $gw->gateway_namespace eq 'Business::OnlineThirdPartyPayment';
   }
 
+  return { 'error' => "CVV2 is required" }
+    if $cust_main->payby =~ /^(CARD|DCRD)$/
+    && ! $cust_main->paycvv
+    && $conf->exists('signup-require_cvv');
+
   $cust_main->payinfo($cust_main->daytime)
     if $cust_main->payby eq 'LECB' && ! $cust_main->payinfo;
 
@@ -873,6 +879,7 @@ sub new_customer {
 #false laziness w/ above
 # fresh restart to support "free account" portals with 3.x/4.x-style
 #  addressless accounts
+# and a contact (for self-service login)
 sub new_customer_minimal {
   my $packet = shift;
 
@@ -932,68 +939,87 @@ sub new_customer_minimal {
                          ? split( /\s*\,\s*/, $packet->{'invoicing_list'} )
                          : ();
 
+  use Tie::RefHash;
+  tie my %hash, 'Tie::RefHash', ();
+  my @svc = ();
+
   $packet->{'pkgpart'} =~ /^(\d+)$/ or '' =~ /^()$/;
   my $pkgpart = $1;
-  return { 'error' => 'Please select a package' } unless $pkgpart; #msgcat
 
-  my $part_pkg =
-    qsearchs( 'part_pkg', { 'pkgpart' => $pkgpart } )
-      or return { 'error' => "WARNING: unknown pkgpart: $pkgpart" };
-  my $svcpart = $part_pkg->svcpart($svc_x);
+  if ( $pkgpart ) {
 
-  my $cust_pkg = new FS::cust_pkg ( {
-    #later#'custnum' => $custnum,
-    'pkgpart'    => $packet->{'pkgpart'},
-  } );
-  #my $error = $cust_pkg->check;
-  #return { 'error' => $error } if $error;
+    my $part_pkg =
+      qsearchs( 'part_pkg', { 'pkgpart' => $pkgpart } )
+        or return { 'error' => "WARNING: unknown pkgpart: $pkgpart" };
+    my $svcpart = $part_pkg->svcpart($svc_x);
 
-  #should be all auto-magic and shit
-  my @svc = ();
-  if ( $svc_x eq 'svc_acct' ) {
-
-    my $svc = new FS::svc_acct {
-      'svcpart'   => $svcpart,
-      map { $_ => $packet->{$_} }
-        qw( username _password sec_phrase popnum domsvc ),
-    };
-
-    push @svc, $svc;
-
-  } elsif ( $svc_x eq 'svc_phone' ) {
-
-    push @svc, new FS::svc_phone ( {
-      'svcpart' => $svcpart,
-       map { $_ => $packet->{$_} }
-         qw( countrycode phonenum sip_password pin ),
+    my $cust_pkg = new FS::cust_pkg ( {
+      #later#'custnum' => $custnum,
+      'pkgpart'    => $packet->{'pkgpart'},
     } );
-
-  } elsif ( $svc_x eq 'svc_pbx' ) {
-
-    push @svc, new FS::svc_pbx ( {
-        'svcpart' => $svcpart,
-        map { $_ => $packet->{$_} } 
-          qw( id title ),
-        } );
-  
-  } else {
-    die "unknown signup service $svc_x";
-  }
-
-  foreach my $svc ( @svc ) {
-    my $y = $svc->setdefault; # arguably should be in new method
-    return { 'error' => $y } if $y && !ref($y);
-    #$error = $svc->check;
+    #my $error = $cust_pkg->check;
     #return { 'error' => $error } if $error;
+
+    #should be all auto-magic and shit
+    if ( $svc_x eq 'svc_acct' ) {
+
+      my $svc = new FS::svc_acct {
+        'svcpart'   => $svcpart,
+        map { $_ => $packet->{$_} }
+          qw( username _password sec_phrase popnum domsvc ),
+      };
+
+      push @svc, $svc;
+
+    } elsif ( $svc_x eq 'svc_phone' ) {
+
+      push @svc, new FS::svc_phone ( {
+        'svcpart' => $svcpart,
+         map { $_ => $packet->{$_} }
+           qw( countrycode phonenum sip_password pin ),
+      } );
+
+    } elsif ( $svc_x eq 'svc_pbx' ) {
+
+      push @svc, new FS::svc_pbx ( {
+          'svcpart' => $svcpart,
+          map { $_ => $packet->{$_} } 
+            qw( id title ),
+          } );
+    
+    } else {
+      die "unknown signup service $svc_x";
+    }
+
+    foreach my $svc ( @svc ) {
+      my $y = $svc->setdefault; # arguably should be in new method
+      return { 'error' => $y } if $y && !ref($y);
+      #$error = $svc->check;
+      #return { 'error' => $error } if $error;
+    }
+
+    use Tie::RefHash;
+    tie my %hash, 'Tie::RefHash';
+    $hash{ $cust_pkg } = \@svc;
+
   }
 
-  use Tie::RefHash;
-  tie my %hash, 'Tie::RefHash';
-  %hash = ( $cust_pkg => \@svc );
-  #msgcat
+  my %opt = ();
+  if ( $invoicing_list[0] && $packet->{'_password'} ) {
+    $opt{'contact'} = [
+      new FS::contact { 'first'        => $cust_main->first,
+                        'last'         => $cust_main->get('last'),
+                        '_password'    => $packet->{'_password'},
+                        'emailaddress' => $invoicing_list[0],
+                        'selfservice_access' => 'Y',
+                      }
+    ];
+  }
+
   my $error = $cust_main->insert(
     \%hash,
     \@invoicing_list,
+    %opt,
   );
   return { 'error' => $error } if $error;
 

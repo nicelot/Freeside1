@@ -428,9 +428,10 @@ $report_menu{'SQL Query'}      = [ $fsurl.'search/report_sql.html', 'SQL Query']
 tie my %tools_importing, 'Tie::IxHash',
   'Customers' => [ $fsurl.'misc/cust_main-import.cgi', '' ],
   'Customer packages' => [ $fsurl.'misc/cust_pkg-import.html', '' ],
-  'Customer comments from CSV file' => [ $fsurl.'misc/cust_main_note-import.html', '' ],
-  'One-time charges from CSV file' => [ $fsurl.'misc/cust_main-import_charges.cgi', '' ],
-  'Payments from CSV file' => [ $fsurl.'misc/cust_pay-import.cgi', '' ],
+  'Customer comments' => [ $fsurl.'misc/cust_main_note-import.html', '' ],
+  'One-time charges' => [ $fsurl.'misc/cust_main-import_charges.cgi', '' ],
+  'Payments' => [ $fsurl.'misc/cust_pay-import.cgi', '' ],
+  'Credits' => [ $fsurl.'misc/cust_credit-import.html', '' ],
   'Phone numbers (DIDs)' => [ $fsurl.'misc/phone_avail-import.html', '' ],
   'Call Detail Records (CDRs)' => [ $fsurl.'misc/cdr-import.html', '' ],
 ;
@@ -765,11 +766,14 @@ $config_menu{'Network Monitoring'} = [ \%config_nms, '' ]
   if $curuser->access_right('Configure network monitoring')
   && $conf->config('network_monitoring_system') eq 'Torrus_Internal';
 
-if (   $curuser->access_right('Configuration' )
-     || $curuser->access_right('Edit advertising sources')
-     || $curuser->access_right('Edit global advertising sources')
+if ( $curuser->access_right([ 'Configuration',
+                              'View templates',
+                              'View global templates',
+                              'Edit templates',
+                              'Edit global templates',
+                           ])
    ) {
-  $config_menu{separator9} = '';
+  $config_menu{separator9} = '' if keys %config_menu;
   $config_menu{'Miscellaneous'} = [ \%config_misc, ''    ];
 }
 
