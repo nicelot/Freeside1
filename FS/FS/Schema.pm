@@ -2959,11 +2959,12 @@ sub tables_hashref {
         'successor',     'int',     'NULL', '', '', '',
         'family_pkgpart','int',     'NULL', '', '', '',
         'delay_start',   'int',     'NULL', '', '', '',
+        'agent_pkgpartid', 'varchar', 'NULL', 20, '', '',
       ],
       'primary_key'  => 'pkgpart',
       'unique'       => [],
       'index'        => [ [ 'promo_code' ], [ 'disabled' ], [ 'classnum' ],
-                          [ 'agentnum' ], ['no_auto'],
+                          [ 'agentnum' ], ['no_auto'], ['agent_pkgpartid'],
                         ],
       'foreign_keys' => [
                           { columns    => [ 'classnum' ],
@@ -5673,6 +5674,45 @@ sub tables_hashref {
       'foreign_keys' => [
                           { columns    => [ 'svcnum' ],
                             table      => 'svc_pbx',
+                          },
+                        ],
+    },
+
+    'pbx_device' => {
+      'columns' => [
+        'devicenum', 'serial',     '', '', '', '',
+        'devicepart',   'int',     '', '', '', '',
+        'svcnum',       'int',     '', '', '', '', 
+        'mac_addr', 'varchar', 'NULL', 12, '', '', 
+      ],
+      'primary_key'  => 'devicenum',
+      'unique'       => [ [ 'mac_addr' ], ],
+      'index'        => [ [ 'devicepart' ], [ 'svcnum' ], ],
+      'foreign_keys' => [
+                          { columns    => [ 'devicepart' ],
+                            table      => 'part_device',
+                          },
+                          { columns    => [ 'svcnum' ],
+                            table      => 'svc_pbx',
+                          },
+                        ],
+    },
+
+    'extension_device' => {
+      'columns' => [
+        'extensiondevicenum', 'serial', '', '', '', '',
+        'extensionnum',          'int', '', '', '', '',
+        'devicenum',             'int', '', '', '', '',
+      ],
+      'primary_key'  => 'extensiondevicenum',
+      'unique'       => [ [ 'extensionnum', 'devicenum' ] ],
+      'index'        => [],#both?  which way do we need to query?
+      'foreign_keys' => [
+                          { columns  => [ 'extensionnum' ],
+                            table    => 'pbx_extension',
+                          },
+                          { columns  => [ 'devicenum' ],
+                            table    => 'pbx_device',
                           },
                         ],
     },

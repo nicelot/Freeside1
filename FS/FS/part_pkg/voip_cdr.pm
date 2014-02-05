@@ -279,7 +279,7 @@ tie my %accountcode_tollfree_field, 'Tie::IxHash',
                        },
     #eofalse
 
-    'usage_nozero' => { 'name' => 'Omit details for included / no-charge calls.',
+    'usage_showzero' => { 'name' => 'Show details for included / no-charge calls.',
                         'type' => 'checkbox',
                       },
 
@@ -352,7 +352,7 @@ tie my %accountcode_tollfree_field, 'Tie::IxHash',
                        output_format 
                        selfservice_format selfservice_inbound_format
                        usage_mandate usage_section summarize_usage 
-                       usage_nozero bill_every_call bill_inactive_svcs
+                       usage_showzero bill_every_call bill_inactive_svcs
                        count_available_phones suspend_bill 
                      )
                   ],
@@ -416,9 +416,12 @@ sub calc_usage {
                                  : 'default'
                              );
 
-  my $usage_nozero      = $self->option('usage_nozero', 1);
+  my $usage_showzero    = $self->option('usage_showzero', 1);
 
-  my $formatter = FS::detail_format->new($output_format, buffer => $details);
+  my $formatter = FS::detail_format->new($output_format,
+    buffer => $details,
+    locale => $cust_pkg->cust_main->locale
+  );
 
   my $use_duration = $self->option('use_duration');
 
@@ -450,10 +453,10 @@ sub calc_usage {
     }
 
     my %options = (
-        'disable_src'    => $self->option('disable_src'),
-        'default_prefix' => $self->option('default_prefix'),
-        'cdrtypenum'     => $self->option('use_cdrtypenum'),
-        'calltypenum'    => $self->option('use_calltypenum'),
+        'disable_src'    => $self->option('disable_src',1),
+        'default_prefix' => $self->option('default_prefix',1),
+        'cdrtypenum'     => $self->option('use_cdrtypenum',1),
+        'calltypenum'    => $self->option('use_calltypenum',1),
         'status'         => '',
         'for_update'     => 1,
       );  # $last_bill, $$sdate )
@@ -508,7 +511,8 @@ sub calc_usage {
         $error = $cdr->set_status('done');
       }
       die $error if $error;
-      $formatter->append($cdr) unless $usage_nozero && $cdr->rated_price == 0;
+      $formatter->append($cdr)
+        unless $cdr->rated_price == 0 and not $usage_showzero;
 
       $cdr_search->adjust(1) if $cdr->freesidestatus eq 'rated';
     } #$cdr

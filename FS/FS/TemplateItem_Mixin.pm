@@ -48,7 +48,7 @@ sub part_pkg {
 
 }
 
-=item desc
+=item desc LOCALE
 
 Returns a description for this line item.  For typical line items, this is the
 I<pkg> field of the corresponding B<FS::part_pkg> object (see L<FS::part_pkg>).
@@ -98,16 +98,19 @@ sub time_period_pretty {
 
   my $time_period;
   if ( defined($date_style) && $date_style eq 'month_of' ) {
-    $time_period = time2str('The month of %B', $self->sdate);
+    # (now watch, someone's going to make us do Chinese)
+    $time_period = $self->mt('The month of [_1]',
+                      $self->time2str_local('%B', $self->sdate)
+                   );
   } elsif ( defined($date_style) && $date_style eq 'X_month' ) {
     my $desc = $conf->config( 'cust_bill-line_item-date_description',
                                $agentnum
                             );
     $desc .= ' ' unless $desc =~ /\s$/;
-    $time_period = $desc. time2str('%B', $self->sdate);
+    $time_period = $desc. $self->time2str_local('%B', $self->sdate);
   } else {
-    $time_period =      time2str($date_format, $self->sdate).
-                 " - ". time2str($date_format, $self->edate);
+    $time_period =      $self->time2str_local($date_format, $self->sdate).
+                 " - ". $self->time2str_local($date_format, $self->edate);
   }
 
   " ($time_period)";

@@ -9,6 +9,7 @@ use vars qw( $DEBUG $me $conf @encrypted_fields
 use Date::Format;
 use Business::CreditCard;
 use Text::Template;
+use FS::Misc::DateTime qw( parse_datetime ); #for batch_import
 use FS::Record qw( dbh qsearch qsearchs );
 use FS::CurrentUser;
 use FS::payby;
@@ -1098,9 +1099,12 @@ Inserts new payments.
 sub batch_import {
   my $param = shift;
 
-  my $fh = $param->{filehandle};
+  my $fh       = $param->{filehandle};
+  my $format   = $param->{'format'};
+
   my $agentnum = $param->{agentnum};
-  my $format = $param->{'format'};
+  my $_date    = $param->{_date};
+  $_date = parse_datetime($_date) if $_date && $_date =~ /\D/;
   my $paybatch = $param->{'paybatch'};
 
   # here is the agent virtualization
@@ -1151,6 +1155,7 @@ sub batch_import {
       payby    => $payby,
       paybatch => $paybatch,
     );
+    $cust_pay{_date} = $_date if $_date;
 
     my $cust_main;
     foreach my $field ( @fields ) {

@@ -2,7 +2,7 @@ package FS::Template_Mixin;
 
 use strict;
 use vars qw( $DEBUG $me
-             $money_char $date_format $rdate_format $date_format_long );
+             $money_char );
              # but NOT $conf
 use vars qw( $invoice_lines @buf ); #yuck
 use List::Util qw(sum);
@@ -27,9 +27,6 @@ $me = '[FS::Template_Mixin]';
 FS::UID->install_callback( sub { 
   my $conf = new FS::Conf; #global
   $money_char       = $conf->config('money_char')       || '$';  
-  $date_format      = $conf->config('date_format')      || '%x'; #/YY
-  $rdate_format     = $conf->config('date_format')      || '%m/%d/%Y';  #/YYYY
-  $date_format_long = $conf->config('date_format_long') || '%b %o, %Y';
 } );
 
 =item conf [ MODE ]
@@ -406,14 +403,6 @@ sub print_generic {
   my $escape_function_nonbsp = ($format eq 'html')
                                  ? \&_html_escape : $escape_function;
 
-  my %date_formats = ( 'latex'    => $date_format_long,
-                       'html'     => $date_format_long,
-                       'template' => '%s',
-                     );
-  $date_formats{'html'} =~ s/ /&nbsp;/g;
-
-  my $date_format = $date_formats{$format};
-
   my %newline_tokens = (  'latex'     => '\\\\',
                           'html'      => '<br>',
                           'template'  => "\n",
@@ -498,14 +487,14 @@ sub print_generic {
     '_date'           => ( $params{'no_date'} ? '' : $self->_date ),
     'date'            => ( $params{'no_date'}
                              ? ''
-                             : time2str($date_format, $self->_date)
+                             : $self->time2str_local('long', $self->_date, $format)
                          ),
-    'today'           => time2str($date_format_long, $today),
+    'today'           => $self->time2str_local('long', $today, $format),
     'terms'           => $self->terms,
     'template'        => $template, #params{'template'},
     'notice_name'     => $notice_name, # escape?
     'current_charges' => sprintf("%.2f", $self->charged),
-    'duedate'         => $self->due_date2str($rdate_format), #date_format?
+    'duedate'         => $self->due_date2str('rdate'), #date_format?
 
     #customer info
     'custnum'         => $cust_main->display_custnum,
@@ -545,15 +534,9 @@ sub print_generic {
   );
  
   #localization
-  my $lh = FS::L10N->get_handle( $locale );
   $invoice_data{'emt'} = sub { &$escape_function($self->mt(@_)) };
-  my %info = FS::Locales->locale_info($cust_main->locale || 'en_US');
-  # eval to avoid death for unimplemented languages
-  my $dh = eval { Date::Language->new($info{'name'}) } ||
-           Date::Language->new(); # fall back to English
   # prototype here to silence warnings
-  $invoice_data{'time2str'} = sub ($;$$) { $dh->time2str(@_) };
-  # eventually use this date handle everywhere in here, too
+  $invoice_data{'time2str'} = sub ($;$$) { $self->time2str_local(@_, $format) };
 
   my $min_sdate = 999999999999;
   my $max_edate = 0;
@@ -566,8 +549,10 @@ sub print_generic {
   }
 
   $invoice_data{'bill_period'} = '';
-  $invoice_data{'bill_period'} = time2str('%e %h', $min_sdate) 
-    . " to " . time2str('%e %h', $max_edate)
+  $invoice_data{'bill_period'} =
+      $self->time2str_local('%e %h', $min_sdate, $format) 
+      . " to " .
+      $self->time2str_local('%e %h', $max_edate, $format)
     if ($max_edate != 0 && $min_sdate != 999999999999);
 
   $invoice_data{finance_section} = '';
@@ -675,7 +660,7 @@ sub print_generic {
         next if $cust_pay->_date > $self->_date;
         push @payments, {
             '_date'       => $cust_pay->_date,
-            'date'        => time2str($date_format, $cust_pay->_date),
+            'date'        => $self->time2str_local('long', $cust_pay->_date, $format),
             'payinfo'     => $cust_pay->payby_payinfo_pretty,
             'amount'      => sprintf('%.2f', $cust_pay->paid),
         };
@@ -690,7 +675,7 @@ sub print_generic {
         next if $cust_credit->_date > $self->_date;
         push @credits, {
             '_date'       => $cust_credit->_date,
-            'date'        => time2str($date_format, $cust_credit->_date),
+            'date'        => $self->time2str_local('long', $cust_credit->_date, $format),
             'creditreason'=> $cust_credit->reason,
             'amount'      => sprintf('%.2f', $cust_credit->amount),
         };
@@ -951,7 +936,7 @@ sub print_generic {
       my $detail = {
         ref             => $line_item->{'pkgnum'},
         pkgpart         => $line_item->{'pkgpart'},
-        quantity        => 1,
+        #quantity        => 1, # not really correct
         section         => $previous_section, # which might be $default_section
         description     => &$escape_function($line_item->{'description'}),
         ext_description => [ map { &$escape_function($_) } 
@@ -1721,7 +1706,7 @@ sub due_date {
 
 sub due_date2str {
   my $self = shift;
-  $self->due_date ? time2str(shift, $self->due_date) : '';
+  $self->due_date ? $self->time2str_local(shift, $self->due_date) : '';
 }
 
 sub balance_due_msg {
@@ -1730,7 +1715,7 @@ sub balance_due_msg {
   return $msg unless $self->terms;
   if ( $self->due_date ) {
     $msg .= ' - ' . $self->mt('Please pay by'). ' '.
-      $self->due_date2str($date_format);
+      $self->due_date2str('short');
   } elsif ( $self->terms ) {
     $msg .= ' - '. $self->terms;
   }
@@ -1743,7 +1728,7 @@ sub balance_due_date {
   my $duedate = '';
   if (    $conf->exists('invoice_default_terms') 
        && $conf->config('invoice_default_terms')=~ /^\s*Net\s*(\d+)\s*$/ ) {
-    $duedate = time2str($rdate_format, $self->_date + ($1*86400) );
+    $duedate = $self->time2str_local('rdate', $self->_date + ($1*86400) );
   }
   $duedate;
 }
@@ -1761,7 +1746,7 @@ Returns a string with the date, for example: "3/20/2008"
 
 sub _date_pretty {
   my $self = shift;
-  time2str($date_format, $self->_date);
+  $self->time2str_local('short', $self->_date);
 }
 
 =item _items_sections OPTIONS
@@ -2591,7 +2576,8 @@ sub _items_cust_bill_pkg {
 
           my $is_summary = $display->summary;
           my $description = $desc;
-          if ( $type eq 'U' and ($is_summary or $cust_bill_pkg->hidden) ) {
+          if ( $type eq 'U' and defined($r) ) {
+            # don't just show the same description as the recur line
             $description = $self->mt('Usage charges');
           }
 
@@ -2611,10 +2597,19 @@ sub _items_cust_bill_pkg {
           push @dates, $prev->sdate if $prev;
           push @dates, undef if !$prev;
 
+          # show service labels, unless...
+                    # the package is set not to display them
           unless ( $part_pkg->hide_svc_detail
+                    # or this is a tax-like line item
                 || $cust_bill_pkg->itemdesc
+                    # or this is a hidden (bundled) line item
                 || $cust_bill_pkg->hidden
+                    # or this is a usage summary line
                 || $is_summary && $type && $type eq 'U'
+                    # or this is a usage line and there's a recurring line
+                    # for the package in the same section (which will 
+                    # have service labels already)
+                || ($type eq 'U' and defined($r))
               )
           {
 
@@ -2662,7 +2657,7 @@ sub _items_cust_bill_pkg {
               }
             } #if svc_acct-usage_seconds
 
-          }
+          } # if we are showing service labels
 
           unless ( $is_summary ) {
             warn "$me _items_cust_bill_pkg adding details\n"
@@ -2688,14 +2683,14 @@ sub _items_cust_bill_pkg {
             $amount = $cust_bill_pkg->usage;
           }
   
-          my $unit_amount =
-            ( $cust_bill_pkg->unitrecur > 0 ) ? $cust_bill_pkg->unitrecur
-                                              : $amount;
-
           if ( !$type || $type eq 'R' ) {
 
             warn "$me _items_cust_bill_pkg adding recur\n"
               if $DEBUG > 1;
+
+            my $unit_amount =
+              ( $cust_bill_pkg->unitrecur > 0 ) ? $cust_bill_pkg->unitrecur
+                                                : $amount;
 
             if ( $cust_bill_pkg->hidden ) {
               $r->{amount}      += $amount;
@@ -2727,7 +2722,6 @@ sub _items_cust_bill_pkg {
               # line for the bundle, add this package's total amount and
               # usage details to it
               $u->{amount}      += $amount;
-              $u->{unit_amount} += $unit_amount,
               push @{ $u->{ext_description} }, @d;
             } elsif ( $amount ) {
               # create a new usage line
@@ -2737,8 +2731,6 @@ sub _items_cust_bill_pkg {
                 pkgnum          => $cust_bill_pkg->pkgnum,
                 amount          => $amount,
                 recur_show_zero => $cust_bill_pkg->recur_show_zero,
-                unit_amount     => $unit_amount,
-                quantity        => $cust_bill_pkg->quantity,
                 %item_dates,
                 ext_description => \@d,
               };
@@ -2761,8 +2753,8 @@ sub _items_cust_bill_pkg {
         if ( $cust_bill_pkg->recur != 0 ) {
           push @b, {
             'description' => "$desc (".
-                             time2str($date_format, $cust_bill_pkg->sdate). ' - '.
-                             time2str($date_format, $cust_bill_pkg->edate). ')',
+                             $self->time2str_local('short', $cust_bill_pkg->sdate). ' - '.
+                             $self->time2str_local('short', $cust_bill_pkg->edate). ')',
             'amount'      => sprintf("%.2f", $cust_bill_pkg->recur),
           };
         }
@@ -2779,8 +2771,11 @@ sub _items_cust_bill_pkg {
   foreach ( $s, $r, ($opt{skip_usage} ? () : $u ) ) {
     if ( $_  ) {
       $_->{amount}      = sprintf( "%.2f", $_->{amount} ),
+        if exists($_->{amount});
       $_->{amount}      =~ s/^\-0\.00$/0.00/;
-      $_->{unit_amount} = sprintf( "%.2f", $_->{unit_amount} ),
+      $_->{unit_amount} = sprintf('%.2f', $_->{unit_amount})
+        if exists($_->{unit_amount});
+
       push @b, { %$_ }
         if $_->{amount} != 0
         || $discount_show_always

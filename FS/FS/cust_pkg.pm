@@ -334,7 +334,9 @@ sub insert {
   }
 
   # set order date unless it was specified as part of an import
-  $self->order_date(time) unless $import && $self->order_date;
+  # or this was previously a different package
+  $self->order_date(time) unless ($import && $self->order_date)
+                              or $self->change_pkgnum;
 
   my $oldAutoCommit = $FS::UID::AutoCommit;
   local $FS::UID::AutoCommit = 0;
@@ -1779,7 +1781,7 @@ sub change {
     $error = $opt->{'cust_location'}->find_or_insert;
     if ( $error ) {
       $dbh->rollback if $oldAutoCommit;
-      return "inserting cust_location (transaction rolled back): $error";
+      return "creating location record: $error";
     }
     $opt->{'locationnum'} = $opt->{'cust_location'}->locationnum;
   }
@@ -1816,6 +1818,9 @@ sub change {
       $hash{$date} = $self->getfield($date);
     }
   }
+  # always keep this date, regardless of anything
+  # (the date of the package change is in a different field)
+  $hash{'order_date'} = $self->getfield('order_date');
 
   # allow $opt->{'locationnum'} = '' to specifically set it to null
   # (i.e. customer default location)
@@ -1834,7 +1839,7 @@ sub change {
       my $error = $cust_main->insert( @{ $opt->{cust_main_insert_args}||[] } );
       if ( $error ) {
         $dbh->rollback if $oldAutoCommit;
-        return "inserting cust_main (transaction rolled back): $error";
+        return "inserting customer record: $error";
       }
     }
     $custnum = $cust_main->custnum;
@@ -1869,7 +1874,7 @@ sub change {
   }
   if ($error) {
     $dbh->rollback if $oldAutoCommit;
-    return $error;
+    return "inserting new package: $error";
   }
 
   # Transfer services and cancel old package.
@@ -1878,7 +1883,7 @@ sub change {
   if ($error and $error == 0) {
     # $old_pkg->transfer failed.
     $dbh->rollback if $oldAutoCommit;
-    return $error;
+    return "transferring $error";
   }
 
   if ( $error > 0 && $conf->exists('cust_pkg-change_svcpart') ) {
@@ -1887,7 +1892,7 @@ sub change {
     if ($error and $error == 0) {
       # $old_pkg->transfer failed.
       $dbh->rollback if $oldAutoCommit;
-      return $error;
+      return "converting $error";
     }
   }
 
@@ -1899,7 +1904,7 @@ sub change {
     # Transfers were successful, but we still had services left on the old
     # package.  We can't change the package under this circumstances, so abort.
     $dbh->rollback if $oldAutoCommit;
-    return "Unable to transfer all services from package ". $self->pkgnum;
+    return "unable to transfer all services";
   }
 
   #reset usage if changing pkgpart
@@ -1914,7 +1919,7 @@ sub change {
 
     if ($error) {
       $dbh->rollback if $oldAutoCommit;
-      return "Error setting usage values: $error";
+      return "setting usage values: $error";
     }
   } else {
     # if NOT changing pkgpart, transfer any usage pools over
@@ -1923,7 +1928,7 @@ sub change {
       $error = $usage->replace;
       if ( $error ) {
         $dbh->rollback if $oldAutoCommit;
-        return "Error transferring usage pools: $error";
+        return "transferring usage pools: $error";
       }
     }
   }
@@ -1956,7 +1961,7 @@ sub change {
       $error = $new_discount->insert;
       if ( $error ) {
         $dbh->rollback if $oldAutoCommit;
-        return "Error transferring discounts: $error";
+        return "transferring discounts: $error";
       }
     }
   }
@@ -1969,7 +1974,7 @@ sub change {
     $error = $new_detail->insert;
     if ( $error ) {
       $dbh->rollback if $oldAutoCommit;
-      return "Error transferring package notes: $error";
+      return "transferring package notes: $error";
     }
   }
   
@@ -2048,7 +2053,7 @@ sub change {
   );
   if ($error) {
     $dbh->rollback if $oldAutoCommit;
-    return $error;
+    return "canceling old package: $error";
   }
 
   if ( $conf->exists('cust_pkg-change_pkgpart-bill_now') ) {
@@ -2058,7 +2063,7 @@ sub change {
     );
     if ( $error ) {
       $dbh->rollback if $oldAutoCommit;
-      return $error;
+      return "billing new package: $error";
     }
   }
 
@@ -3565,14 +3570,15 @@ sub transfer {
     }
   }
 
+  my $error;
   foreach my $cust_svc ($self->cust_svc) {
+    my $svcnum = $cust_svc->svcnum;
     if($target{$cust_svc->svcpart} > 0
        or $FS::cust_svc::ignore_quantity) { # maybe should be a 'force' option
       $target{$cust_svc->svcpart}--;
       my $new = new FS::cust_svc { $cust_svc->hash };
       $new->pkgnum($dest_pkgnum);
-      my $error = $new->replace($cust_svc);
-      return $error if $error;
+      $error = $new->replace($cust_svc);
     } elsif ( exists $opt{'change_svcpart'} && $opt{'change_svcpart'} ) {
       if ( $DEBUG ) {
         warn "looking for alternates for svcpart ". $cust_svc->svcpart. "\n";
@@ -3592,13 +3598,16 @@ sub transfer {
         my $new = new FS::cust_svc { $cust_svc->hash };
         $new->svcpart($change_svcpart);
         $new->pkgnum($dest_pkgnum);
-        my $error = $new->replace($cust_svc);
-        return $error if $error;
+        $error = $new->replace($cust_svc);
       } else {
         $remaining++;
       }
     } else {
       $remaining++
+    }
+    if ( $error ) {
+      my @label = $cust_svc->label;
+      return "$label[0] $label[1]: $error";
     }
   }
   return $remaining;
