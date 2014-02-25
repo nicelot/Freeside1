@@ -13,6 +13,7 @@ our %class_name = (
   'U' => 'activate', #uncancel/unsuspend
   'W' => 'renewal',
   'T' => 'term change',
+  'F' => 'refund',
 );
 
 our %class_purpose = (  
@@ -22,6 +23,7 @@ our %class_purpose = (
   'U' => 'explain why a customer package was unsuspended/uncanceled/activated',
   'W' => 'explain why a customer package was renewed',
   'T' => 'explain why a customer package term was changed',
+  'F' => 'explain why a customer was refunded',
 );
 
 =head1 NAME
