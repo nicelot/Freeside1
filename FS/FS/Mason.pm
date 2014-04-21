@@ -78,8 +78,6 @@ if ( -e $addl_handler_use_file ) {
   use HTML::FormatText;
   use HTML::Defang;
   use JSON::XS;
-#  use XMLRPC::Transport::HTTP;
-#  use XMLRPC::Lite; # for XMLRPC::Serializer
   use MIME::Base64;
   use IO::Handle;
   use IO::File;
@@ -165,6 +163,7 @@ if ( -e $addl_handler_use_file ) {
   use FS::h_cust_main;
   use FS::cust_main::Search qw(smart_search);
   use FS::cust_main::Import;
+  use FS::cust_main::Import_Charges;
   use FS::cust_main_county;
   use FS::cust_location;
   use FS::cust_pay;
@@ -214,7 +213,6 @@ if ( -e $addl_handler_use_file ) {
   use FS::usage_class;
   use FS::payment_gateway;
   use FS::agent_payment_gateway;
-  use FS::XMLRPC;
   use FS::payby;
   use FS::cdr;
   use FS::cdr_batch;
@@ -371,6 +369,14 @@ if ( -e $addl_handler_use_file ) {
   use FS::pbx_extension;
   use FS::pbx_device;
   use FS::extension_device;
+  use FS::cust_main_credit_limit;
+  use FS::cust_event_fee;
+  use FS::part_fee;
+  use FS::cust_bill_pkg_fee;
+  use FS::part_fee_msgcat;
+  use FS::part_fee_usage;
+  use FS::sched_item;
+  use FS::sched_avail;
   # Sammath Naur
 
   if ( $FS::Mason::addl_handler_use ) {

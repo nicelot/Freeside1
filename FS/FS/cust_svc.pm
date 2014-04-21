@@ -5,6 +5,7 @@ use strict;
 use vars qw( $DEBUG $me $ignore_quantity $conf $ticket_system );
 use Carp;
 #use Scalar::Util qw( blessed );
+use List::Util qw( max );
 use FS::Conf;
 use FS::Record qw( qsearch qsearchs dbh str2time_sql );
 use FS::part_pkg;
@@ -363,15 +364,44 @@ sub check {
   return "Unknown svcpart" unless $part_svc;
 
   if ( $self->pkgnum && ! $ignore_quantity ) {
-    my $cust_pkg = qsearchs( 'cust_pkg', { 'pkgnum' => $self->pkgnum } );
-    return "Unknown pkgnum" unless $cust_pkg;
-    ($part_svc) = grep { $_->svcpart == $self->svcpart } $cust_pkg->part_svc;
-    return "No svcpart ". $self->svcpart.
-           " services in pkgpart ". $cust_pkg->pkgpart
-      unless $part_svc || $ignore_quantity;
-    return "Already ". $part_svc->get('num_cust_svc'). " ". $part_svc->svc.
+
+    #slightly inefficient since ->pkg_svc will also look it up, but fixing
+    # a much larger perf problem and have bigger fish to fry
+    my $cust_pkg = $self->cust_pkg;
+
+    my $pkg_svc = $self->pkg_svc
+                    || new FS::pkg_svc { 'svcpart'  => $self->svcpart,
+                                         'pkgpart'  => $cust_pkg->pkgpart,
+                                         'quantity' => 0,
+                                       };
+
+    #service add-ons, kinda false laziness/reimplementation of part_pkg->pkg_svc
+    foreach my $part_pkg_link ( $cust_pkg->part_pkg->svc_part_pkg_link ) {
+      my $addon_pkg_svc = qsearchs('pkg_svc', {
+                            pkgpart => $part_pkg_link->dst_pkgpart,
+                            svcpart => $self->svcpart,
+                          });
+      $pkg_svc->quantity( $pkg_svc->quantity + $addon_pkg_svc->quantity )
+        if $addon_pkg_svc;
+    }
+
+   #better error message?  UI shouldn't get here
+   return "No svcpart ". $self->svcpart.
+          " services in pkgpart ". $cust_pkg->pkgpart
+     unless $pkg_svc->quantity > 0;
+
+    my $num_cust_svc = $cust_pkg->num_cust_svc( $self->svcpart );
+
+    #false laziness w/cust_pkg->part_svc
+    my $num_avail = max( 0, ($cust_pkg->quantity || 1) * $pkg_svc->quantity
+                            - $num_cust_svc
+                       );
+
+   #better error message?  again, UI shouldn't get here
+    return "Already $num_cust_svc ". $pkg_svc->part_svc->svc.
            " services for pkgnum ". $self->pkgnum
-      if !$ignore_quantity && $part_svc->get('num_avail') <= 0 ;
+      if $num_avail <= 0;
+
   }
 
   $self->SUPER::check;

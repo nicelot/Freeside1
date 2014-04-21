@@ -200,8 +200,15 @@
                      { type  => 'tablebreak-tr-title',
                        value => 'Cost tracking', #better name?
                      },
-                     { field=>'setup_cost', type=>'money', },
-                     { field=>'recur_cost', type=>'money', },
+
+                     ( $curuser->access_right('Edit package definition costs')
+                       ? ( { field=>'setup_cost', type=>'money', },
+                           { field=>'recur_cost', type=>'money', },
+                         )
+                       : ( { field=>'setup_cost', type=>'fixed', },
+                           { field=>'recur_cost', type=>'fixed', },
+                         )
+                     ),
 
                      ( $conf->exists('part_pkg-delay_start')
                        ? ( { type  => 'tablebreak-tr-title',
@@ -301,6 +308,7 @@
                                             ? "AND pkgpart != $pkgpart"
                                             : ''
                                          },
+                     'label_callback' => sub { shift->pkg_comment_only },
                      'm2_label'   => 'Include line item(s) from package',
                      'm2m_method' => 'bill_part_pkg_link',
                      'm2m_dstcol' => 'dst_pkgpart',
@@ -327,6 +335,7 @@
                                             ? "AND pkgpart != $pkgpart"
                                             : ''
                                          },
+                     'label_callback' => sub { shift->pkg_comment_only },
                      'm2_label'   => 'Include services of package: ',
                      'm2m_method' => 'svc_part_pkg_link',
                      'm2m_dstcol' => 'dst_pkgpart',
@@ -343,6 +352,7 @@
                    },
                    { 'field'       => 'supp_dst_pkgpart',
                      'type'        => 'select-part_pkg',
+                     'label_callback' => sub { shift->pkg_comment_only },
                      'm2_label'    => 'When ordering package, also order',
                      'm2m_method'  => 'supp_part_pkg_link',
                      'm2m_dstcol'  => 'dst_pkgpart',

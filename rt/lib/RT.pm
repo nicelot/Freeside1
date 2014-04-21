@@ -2,7 +2,7 @@
 #
 # COPYRIGHT:
 #
-# This software is Copyright (c) 1996-2013 Best Practical Solutions, LLC
+# This software is Copyright (c) 1996-2014 Best Practical Solutions, LLC
 #                                          <sales@bestpractical.com>
 #
 # (Except where explicitly superseded by other copyright notices)
@@ -181,6 +181,8 @@ up logging|/InitLogging>, and L<loads plugins|/InitPlugins>.
 =cut
 
 sub Init {
+    shift if @_%2; # code is inconsistent about calling as method
+    my %args = (@_);
 
     CheckPerlRequirements();
 
@@ -189,8 +191,13 @@ sub Init {
     #Get a database connection
     ConnectToDatabase();
     InitSystemObjects();
+<<<<<<< HEAD
     InitClasses();
     InitLogging();
+=======
+    InitClasses(%args);
+    InitLogging(%args);
+>>>>>>> af167dc766fad944b32ca7dc431b2549943b94dd
     InitPlugins();
     RT::I18N->Init;
     RT->Config->PostLoadCheck;
@@ -262,7 +269,7 @@ sub InitLogging {
             my ($package, $filename, $line) = caller($frame);
 
             $p{'message'} =~ s/(?:\r*\n)+$//;
-            return "[". gmtime(time) ."] [". $p{'level'} ."]: "
+            return "[$$] [". gmtime(time) ."] [". $p{'level'} ."]: "
                 . $p{'message'} ." ($filename:$line)\n";
         };
 
@@ -281,9 +288,9 @@ sub InitLogging {
 
             $p{message} =~ s/(?:\r*\n)+$//;
             if ($p{level} eq 'debug') {
-                return "$p{message}\n";
+                return "[$$] $p{message} ($filename:$line)\n";
             } else {
-                return "$p{message} ($filename:$line)\n";
+                return "[$$] $p{message}\n";
             }
         };
 

@@ -1065,6 +1065,8 @@ sub generate_email {
   my %return = (
     'from'      => $args{'from'},
     'subject'   => ($args{'subject'} || $self->email_subject),
+    'custnum'   => $self->custnum,
+    'msgtype'   => 'invoice',
   );
 
   $args{'unsquelch_cdr'} = $conf->exists('voip-cdr_email');
@@ -1117,6 +1119,7 @@ sub generate_email {
     $alternative->attach(
       'Type'        => 'text/plain',
       'Encoding'    => 'quoted-printable',
+      'Charset'     => 'UTF-8',
       #'Encoding'    => '7bit',
       'Data'        => $data,
       'Disposition' => 'inline',

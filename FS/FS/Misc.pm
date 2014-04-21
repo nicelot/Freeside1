@@ -154,6 +154,7 @@ sub send_email {
   
       unshift @mimeparts, { 
         'Type'        => ( $options{'content-type'} || 'text/plain' ),
+        'Charset'     => 'UTF-8',
         'Data'        => $options{'body'},
         'Encoding'    => ( $options{'content-type'} ? '-SUGGEST' : '7bit' ),
         'Disposition' => 'inline',
@@ -165,6 +166,7 @@ sub send_email {
         'Type'     => ( $options{'content-type'} || 'text/plain' ),
         'Data'     => $options{'body'},
         'Encoding' => ( $options{'content-type'} ? '-SUGGEST' : '7bit' ),
+        'Charset'  => 'UTF-8',
       );
 
     }
@@ -267,7 +269,7 @@ sub send_email {
   }
 
   # Logging
-  if ( $conf->exists('log_sent_mail') and $options{'custnum'} ) {
+  if ( $conf->exists('log_sent_mail') ) {
     my $cust_msg = FS::cust_msg->new({
         'env_from'  => $options{'from'},
         'env_to'    => join(', ', @to),
@@ -278,6 +280,7 @@ sub send_email {
         'custnum'   => $options{'custnum'},
         'msgnum'    => $options{'msgnum'},
         'status'    => ($error ? 'failed' : 'sent'),
+        'msgtype'   => $options{'msgtype'},
     });
     $cust_msg->insert; # ignore errors
   }
@@ -337,7 +340,7 @@ sub generate_email {
 
   my $me = '[FS::Misc::generate_email]';
 
-  my @fields = qw(from to bcc subject custnum msgnum);
+  my @fields = qw(from to bcc subject custnum msgnum msgtype);
   my %return;
   @return{@fields} = @args{@fields};
 
@@ -362,6 +365,7 @@ sub generate_email {
   $alternative->attach(
     'Type'        => 'text/plain',
     'Encoding'    => 'quoted-printable',
+    'Charset'     => 'UTF-8',
     #'Encoding'    => '7bit',
     'Data'        => $data,
     'Disposition' => 'inline',

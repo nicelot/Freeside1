@@ -1,5 +1,6 @@
 package FS::cust_credit;
-use base qw( FS::otaker_Mixin FS::cust_main_Mixin FS::Record );
+use base qw( FS::otaker_Mixin FS::cust_main_Mixin FS::reason_Mixin
+             FS::Record );
 
 use strict;
 use vars qw( $conf $unsuspendauto $me $DEBUG
@@ -21,6 +22,7 @@ use FS::cust_event;
 use FS::agent;
 use FS::sales;
 use FS::cust_credit_void;
+use FS::cust_bill_pkg;
 use FS::upgrade_journal;
 
 $me = '[ FS::cust_credit ]';
@@ -447,56 +449,7 @@ sub credited {
 
 Returns the customer (see L<FS::cust_main>) for this credit.
 
-=item reason
-
-Returns the text of the associated reason (see L<FS::reason>) for this credit.
-
 =cut
-
-sub reason {
-  my ($self, $value, %options) = @_;
-  my $dbh = dbh;
-  my $reason;
-  my $typenum = $options{'reason_type'};
-
-  my $oldAutoCommit = $FS::UID::AutoCommit;  # this should already be in
-  local $FS::UID::AutoCommit = 0;            # a transaction if it matters
-
-  if ( defined( $value ) ) {
-    my $hashref = { 'reason' => $value };
-    $hashref->{'reason_type'} = $typenum if $typenum;
-    my $addl_from = "LEFT JOIN reason_type ON ( reason_type = typenum ) ";
-    my $extra_sql = " AND reason_type.class='R'"; 
-
-    $reason = qsearchs( { 'table'     => 'reason',
-                          'hashref'   => $hashref,
-                          'addl_from' => $addl_from,
-                          'extra_sql' => $extra_sql,
-                       } );
-
-    if (!$reason && $typenum) {
-      $reason = new FS::reason( { 'reason_type' => $typenum,
-                                  'reason' => $value,
-                                  'disabled' => 'Y', 
-                              } );
-      my $error = $reason->insert;
-      if ( $error ) {
-        warn "error inserting reason: $error\n";
-        $reason = undef;
-      }
-    }
-
-    $self->reasonnum($reason ? $reason->reasonnum : '') ;
-    warn "$me reason used in set mode with non-existant reason -- clearing"
-      unless $reason;
-  }
-  $reason = qsearchs( 'reason', { 'reasonnum' => $self->reasonnum } );
-
-  $dbh->commit or die $dbh->errstr if $oldAutoCommit;
-
-  ( $reason ? $reason->reason : '' ).
-  ( $self->addlinfo ? ' '.$self->addlinfo : '' );
-}
 
 # _upgrade_data
 #
@@ -507,56 +460,9 @@ sub _upgrade_data {  # class method
 
   warn "$me upgrading $class\n" if $DEBUG;
 
+  $class->_upgrade_reasonnum(%opts);
+
   if (defined dbdef->table($class->table)->column('reason')) {
-
-    warn "$me Checking for unmigrated reasons\n" if $DEBUG;
-
-    my @cust_credits = qsearch({ 'table'     => $class->table,
-                                 'hashref'   => {},
-                                 'extra_sql' => 'WHERE reason IS NOT NULL',
-                              });
-
-    if (scalar(grep { $_->getfield('reason') =~ /\S/ } @cust_credits)) {
-      warn "$me Found unmigrated reasons\n" if $DEBUG;
-      my $hashref = { 'class' => 'R', 'type' => 'Legacy' };
-      my $reason_type = qsearchs( 'reason_type', $hashref );
-      unless ($reason_type) {
-        $reason_type  = new FS::reason_type( $hashref );
-        my $error   = $reason_type->insert();
-        die "$class had error inserting FS::reason_type into database: $error\n"
-          if $error;
-      }
-
-      $hashref = { 'reason_type' => $reason_type->typenum,
-                   'reason' => '(none)'
-                 };
-      my $noreason = qsearchs( 'reason', $hashref );
-      unless ($noreason) {
-        $hashref->{'disabled'} = 'Y';
-        $noreason = new FS::reason( $hashref );
-        my $error  = $noreason->insert();
-        die "can't insert legacy reason '(none)' into database: $error\n"
-          if $error;
-      }
-
-      foreach my $cust_credit ( @cust_credits ) {
-        my $reason = $cust_credit->getfield('reason');
-        warn "Contemplating reason $reason\n" if $DEBUG > 1;
-        if ($reason =~ /\S/) {
-          $cust_credit->reason($reason, 'reason_type' => $reason_type->typenum)
-            or die "can't insert legacy reason $reason into database\n";
-        }else{
-          $cust_credit->reasonnum($noreason->reasonnum);
-        }
-
-        $cust_credit->setfield('reason', '');
-        my $error = $cust_credit->replace;
-
-        warn "*** WARNING: error replacing reason in $class ".
-             $cust_credit->crednum. ": $error ***\n"
-          if $error;
-      }
-    }
 
     warn "$me Ensuring existance of auto reasons\n" if $DEBUG;
 
@@ -784,7 +690,6 @@ Example:
 =cut
 
 #maybe i should just be an insert with extra args instead of a class method
-use FS::cust_bill_pkg;
 sub credit_lineitems {
   my( $class, %arg ) = @_;
   my $curuser = $FS::CurrentUser::CurrentUser;
@@ -910,14 +815,10 @@ sub credit_lineitems {
 
     # recalculate taxes with new amounts
     $taxlisthash{$invnum} ||= {};
-    my $part_pkg = $cust_bill_pkg->part_pkg;
-    $cust_main->_handle_taxes( $part_pkg,
-                               $taxlisthash{$invnum},
-                               $cust_bill_pkg,
-                               $cust_bill_pkg->cust_pkg,
-                               $cust_bill_pkg->cust_bill->_date, #invoice time
-                               $cust_bill_pkg->cust_pkg->pkgpart,
-                             );
+    if ( $cust_bill_pkg->pkgnum or $cust_bill_pkg->feepart ) {
+      $cust_main->_handle_taxes( $taxlisthash{$invnum}, $cust_bill_pkg );
+    } # otherwise the item itself is a tax, and assume the caller knows
+      # what they're doing
   }
 
   ###
@@ -1013,12 +914,12 @@ sub credit_lineitems {
 
       # we still have to deal with the possibility that the tax links don't
       # cover the whole amount of tax because of an incomplete upgrade...
-      if ($amount > 0) {
+      if ($amount > 0.005) {
         $cust_credit_bill{$invnum} += $amount;
         push @{ $cust_credit_bill_pkg{$invnum} },
           new FS::cust_credit_bill_pkg {
             'billpkgnum' => $tax_item->billpkgnum,
-            'amount'     => $amount,
+            'amount'     => sprintf('%.2f', $amount),
             'setuprecur' => 'setup',
           };
 

@@ -485,9 +485,14 @@ sub print_generic {
     'quotationnum'    => $self->quotationnum,
     'no_date'         => $params{'no_date'},
     '_date'           => ( $params{'no_date'} ? '' : $self->_date ),
+      # workaround for inconsistent behavior in the early plain text 
+      # templates; see RT#28271
     'date'            => ( $params{'no_date'}
                              ? ''
-                             : $self->time2str_local('long', $self->_date, $format)
+                             : ($format eq 'template'
+                               ? $self->_date
+                               : $self->time2str_local('long', $self->_date, $format)
+                               )
                          ),
     'today'           => $self->time2str_local('long', $today, $format),
     'terms'           => $self->terms,
@@ -2452,6 +2457,8 @@ sub _items_cust_bill_pkg {
 
         warn "$me _items_cust_bill_pkg cust_bill_pkg is quotation_pkg\n"
           if $DEBUG > 1;
+        # quotation_pkgs are never fees, so don't worry about the case where
+        # part_pkg is undefined
 
         if ( $cust_bill_pkg->setup != 0 ) {
           my $description = $desc;
@@ -2471,7 +2478,7 @@ sub _items_cust_bill_pkg {
           };
         }
 
-      } elsif ( $cust_bill_pkg->pkgnum > 0 ) {
+      } elsif ( $cust_bill_pkg->pkgnum > 0 ) { # and it's not a quotation_pkg
 
         warn "$me _items_cust_bill_pkg cust_bill_pkg is non-tax\n"
           if $DEBUG > 1;
@@ -2739,29 +2746,21 @@ sub _items_cust_bill_pkg {
 
         } # recurring or usage with recurring charge
 
-      } else { #pkgnum tax or one-shot line item (??)
+      } else { # taxes and fees
 
         warn "$me _items_cust_bill_pkg cust_bill_pkg is tax\n"
           if $DEBUG > 1;
 
-        if ( $cust_bill_pkg->setup != 0 ) {
-          push @b, {
-            'description' => $desc,
-            'amount'      => sprintf("%.2f", $cust_bill_pkg->setup),
-          };
-        }
-        if ( $cust_bill_pkg->recur != 0 ) {
-          push @b, {
-            'description' => "$desc (".
-                             $self->time2str_local('short', $cust_bill_pkg->sdate). ' - '.
-                             $self->time2str_local('short', $cust_bill_pkg->edate). ')',
-            'amount'      => sprintf("%.2f", $cust_bill_pkg->recur),
-          };
-        }
+        # items of this kind should normally not have sdate/edate.
+        push @b, {
+          'description' => $desc,
+          'amount'      => sprintf('%.2f', $cust_bill_pkg->setup 
+                                           + $cust_bill_pkg->recur)
+        };
 
-      }
+      } # if quotation / package line item / other line item
 
-    }
+    } # foreach $display
 
     $discount_show_always = ($cust_bill_pkg->cust_bill_pkg_discount
                                 && $conf->exists('discount-show-always'));

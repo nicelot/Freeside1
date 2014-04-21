@@ -2,7 +2,7 @@
 #
 # COPYRIGHT:
 #
-# This software is Copyright (c) 1996-2013 Best Practical Solutions, LLC
+# This software is Copyright (c) 1996-2014 Best Practical Solutions, LLC
 #                                          <sales@bestpractical.com>
 #
 # (Except where explicitly superseded by other copyright notices)
@@ -1246,6 +1246,10 @@ sub ValidateWebConfig {
                          ."otherwise your internal links may be broken.");
     }
 
+    return; #next warning flooding our logs, doesn't seem applicable to our use
+            # (SCRIPT_NAME is the full path, WebPath is just the beginning)
+            #in vanilla RT does something eat the local part of SCRIPT_NAME 1st?
+
     # Unfortunately, there is no reliable way to get the _path_ that was
     # requested at the proxy level; simply disable this warning if we're
     # proxied and there's a mismatch.
@@ -1283,10 +1287,16 @@ our %is_whitelisted_component = (
     # While these can be used for denial-of-service against RT
     # (construct a very inefficient query and trick lots of users into
     # running them against RT) it's incredibly useful to be able to link
-    # to a search result or bookmark a result page.
+    # to a search result (or chart) or bookmark a result page.
     '/Search/Results.html' => 1,
     '/Search/Simple.html'  => 1,
-    '/m/tickets/search'     => 1,
+    '/m/tickets/search'    => 1,
+    '/Search/Chart.html'   => 1,
+
+    # This page takes Attachment and Transaction argument to figure
+    # out what to show, but it's read only and will deny information if you
+    # don't have ShowOutgoingEmail.
+    '/Ticket/ShowEmailRecord.html' => 1,
 );
 
 # Components which are blacklisted from automatic, argument-based whitelisting.
@@ -1762,7 +1772,7 @@ sub CreateTicket {
         $RT::Logger->error("Couldn't make multipart message")
             if !$rv || $rv !~ /^(?:DONE|ALREADY)$/;
 
-        foreach ( values %{ $ARGS{'Attachments'} } ) {
+        foreach ( map $ARGS{Attachments}->{$_}, sort keys %{ $ARGS{'Attachments'} } ) {
             unless ($_) {
                 $RT::Logger->error("Couldn't add empty attachemnt");
                 next;
@@ -2017,7 +2027,8 @@ sub ProcessUpdateMessage {
 
     if ( $args{ARGSRef}->{'UpdateAttachments'} ) {
         $Message->make_multipart;
-        $Message->add_part($_) foreach values %{ $args{ARGSRef}->{'UpdateAttachments'} };
+        $Message->add_part($_) foreach map $args{ARGSRef}->{UpdateAttachments}{$_},
+                                  sort keys %{ $args{ARGSRef}->{'UpdateAttachments'} };
     }
 
     if ( $args{ARGSRef}->{'AttachTickets'} ) {
@@ -2619,18 +2630,23 @@ sub ProcessTicketReminders {
         while ( my $reminder = $reminder_collection->Next ) {
             my $resolve_status = $reminder->QueueObj->Lifecycle->ReminderStatusOnResolve;
             if (   $reminder->Status ne $resolve_status && $args->{ 'Complete-Reminder-' . $reminder->id } ) {
-                $Ticket->Reminders->Resolve($reminder);
+                my ($status, $msg) = $Ticket->Reminders->Resolve($reminder);
+                push @results, loc("Reminder #[_1]: [_2]", $reminder->id, $msg);
+
             }
             elsif ( $reminder->Status eq $resolve_status && !$args->{ 'Complete-Reminder-' . $reminder->id } ) {
-                $Ticket->Reminders->Open($reminder);
+                my ($status, $msg) = $Ticket->Reminders->Open($reminder);
+                push @results, loc("Reminder #[_1]: [_2]", $reminder->id, $msg);
             }
 
             if ( exists( $args->{ 'Reminder-Subject-' . $reminder->id } ) && ( $reminder->Subject ne $args->{ 'Reminder-Subject-' . $reminder->id } )) {
-                $reminder->SetSubject( $args->{ 'Reminder-Subject-' . $reminder->id } ) ;
+                my ($status, $msg) = $reminder->SetSubject( $args->{ 'Reminder-Subject-' . $reminder->id } ) ;
+                push @results, loc("Reminder #[_1]: [_2]", $reminder->id, $msg);
             }
 
             if ( exists( $args->{ 'Reminder-Owner-' . $reminder->id } ) && ( $reminder->Owner != $args->{ 'Reminder-Owner-' . $reminder->id } )) {
-                $reminder->SetOwner( $args->{ 'Reminder-Owner-' . $reminder->id } , "Force" ) ;
+                my ($status, $msg) = $reminder->SetOwner( $args->{ 'Reminder-Owner-' . $reminder->id } , "Force" ) ;
+                push @results, loc("Reminder #[_1]: [_2]", $reminder->id, $msg);
             }
 
             if ( exists( $args->{ 'Reminder-Due-' . $reminder->id } ) && $args->{ 'Reminder-Due-' . $reminder->id } ne '' ) {
@@ -2640,7 +2656,8 @@ sub ProcessTicketReminders {
                     Value  => $args->{ 'Reminder-Due-' . $reminder->id }
                 );
                 if ( defined $DateObj->Unix && $DateObj->Unix != $reminder->DueObj->Unix ) {
-                    $reminder->SetDue( $DateObj->ISO );
+                    my ($status, $msg) = $reminder->SetDue( $DateObj->ISO );
+                    push @results, loc("Reminder #[_1]: [_2]", $reminder->id, $msg);
                 }
             }
         }
@@ -3180,7 +3197,8 @@ sub GetColumnMapEntry {
     }
 
     # complex things
-    elsif ( my ( $mainkey, $subkey ) = $args{'Name'} =~ /^(.*?)\.{(.+)}$/ ) {
+    elsif ( my ( $mainkey, $subkey ) = $args{'Name'} =~ /^(.*?)\.(.+)$/ ) {
+        $subkey =~ s/^\{(.*)\}$/$1/;
         return undef unless $args{'Map'}->{$mainkey};
         return $args{'Map'}{$mainkey}{ $args{'Attribute'} }
             unless ref $args{'Map'}{$mainkey}{ $args{'Attribute'} } eq 'CODE';

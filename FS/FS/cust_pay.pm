@@ -417,12 +417,17 @@ sub void {
   } );
   $cust_pay_void->reason(shift) if scalar(@_);
   my $error = $cust_pay_void->insert;
-  if ( $error ) {
-    $dbh->rollback if $oldAutoCommit;
-    return $error;
+
+  my $cust_pay_pending =
+    qsearchs('cust_pay_pending', { paynum => $self->paynum });
+  if ( $cust_pay_pending ) {
+    $cust_pay_pending->set('void_paynum', $self->paynum);
+    $cust_pay_pending->set('paynum', '');
+    $error ||= $cust_pay_pending->replace;
   }
 
-  $error = $self->delete;
+  $error ||= $self->delete;
+
   if ( $error ) {
     $dbh->rollback if $oldAutoCommit;
     return $error;
@@ -618,11 +623,12 @@ sub send_receipt {
         'custnum' => $cust_main->custnum,
       };
       $error = $queue->insert(
-         FS::msg_template->by_key($msgnum)->prepare(
+        FS::msg_template->by_key($msgnum)->prepare(
           'cust_main'   => $cust_main,
           'object'      => $self,
           'from_config' => 'payment_receipt_from',
-        )
+        ),
+        'msgtype' => 'receipt', # override msg_template's default
       );
 
     } elsif ( $conf->exists('payment_receipt_email') ) {
@@ -656,6 +662,8 @@ sub send_receipt {
         'company_name' => $conf->config('company_name', $cust_main->agentnum),
       );
 
+      $fill_in{'invnum'} = $opt->{cust_bill}->invnum if $opt->{cust_bill};
+
       if ( $opt->{'cust_pkg'} ) {
         $fill_in{'pkg'} = $opt->{'cust_pkg'}->part_pkg->pkg;
         #setup date, other things?
@@ -665,6 +673,7 @@ sub send_receipt {
         'job'     => 'FS::Misc::process_send_generated_email',
         'paynum'  => $self->paynum,
         'custnum' => $cust_main->custnum,
+        'msgtype' => 'receipt',
       };
       $error = $queue->insert(
         'from'    => $conf->config('invoice_from', $cust_main->agentnum),
@@ -1107,6 +1116,9 @@ sub batch_import {
   $_date = parse_datetime($_date) if $_date && $_date =~ /\D/;
   my $paybatch = $param->{'paybatch'};
 
+  my $custnum_prefix = $conf->config('cust_main-custnum-display_prefix');
+  my $custnum_length = $conf->config('cust_main-custnum-display_length') || 8;
+
   # here is the agent virtualization
   my $extra_sql = ' AND '. $FS::CurrentUser::CurrentUser->agentnums_sql;
 
@@ -1191,6 +1203,11 @@ sub batch_import {
       }
 
       $cust_pay{$field} = shift @columns; 
+    }
+
+    if ( $custnum_prefix && $cust_pay{custnum} =~ /^$custnum_prefix(0*([1-9]\d*))$/
+                         && length($1) == $custnum_length ) {
+      $cust_pay{custnum} = $2;
     }
 
     my $cust_pay = new FS::cust_pay( \%cust_pay );

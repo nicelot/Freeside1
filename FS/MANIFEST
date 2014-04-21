@@ -24,6 +24,7 @@ bin/freeside-sqlradius-reset
 bin/freeside-sqlradius-seconds
 bin/freeside-torrus-srvderive
 FS.pm
+FS/API.pm
 FS/AccessRight.pm
 FS/AuthCookieHandler.pm
 FS/AuthCookieHandler24.pm
@@ -46,6 +47,7 @@ FS/Cron/backup.pm
 FS/Cron/bill.pm
 FS/Cron/vacuum.pm
 FS/Daemon.pm
+FS/Daemon/Preforking.pm
 FS/Misc.pm
 FS/Record.pm
 FS/Report.pm
@@ -73,6 +75,7 @@ FS/cust_main/Billing.pm
 FS/cust_main/Billing_Discount.pm
 FS/cust_main/Billing_Realtime.pm
 FS/cust_main/Import.pm
+FS/cust_main/Import_Charges.pm
 FS/cust_main/Packages.pm
 FS/cust_main/Search.pm
 FS/cust_main_Mixin.pm
@@ -84,6 +87,8 @@ FS/cust_bill_pay.pm
 FS/cust_pay_batch.pm
 FS/cust_pay_refund.pm
 FS/cust_pkg.pm
+FS/cust_pkg/Import.pm
+FS/cust_pkg/Search.pm
 FS/cust_refund.pm
 FS/cust_credit_refund.pm
 FS/cust_svc.pm
@@ -455,8 +460,6 @@ FS/tax_rate_location.pm
 t/tax_rate_location.t
 FS/cust_bill_pkg_tax_rate_location.pm
 t/cust_bill_pkg_tax_rate_location.t
-FS/cust_recon.pm
-t/cust_recon.t
 FS/part_pkg_report_option.pm
 t/part_pkg_report_option.t
 FS/cust_main_exemption.pm
@@ -755,3 +758,19 @@ FS/pbx_device.pm
 t/pbx_device.t
 FS/extension_device.pm
 t/extension_device.t
+FS/cust_main_credit_limit.pm
+t/cust_main_credit_limit.t
+FS/cust_event_fee.pm
+t/cust_event_fee.t
+FS/part_fee.pm
+t/part_fee.t
+FS/cust_bill_pkg_fee.pm
+t/cust_bill_pkg_fee.t
+FS/part_fee_msgcat.pm
+t/part_fee_msgcat.t
+FS/part_fee_usage.pm
+FS/part_fee_usage.t
+FS/sched_item.pm
+t/sched_item.t
+FS/sched_avail.pm
+t/sched_avail.t

@@ -7,6 +7,7 @@ use base qw( FS::cust_main::Packages
              FS::cust_main::Billing_Discount
              FS::cust_main::Billing_ThirdParty
              FS::cust_main::Location
+             FS::cust_main::Credit_Limit
              FS::otaker_Mixin FS::payinfo_Mixin FS::cust_main_Mixin
              FS::geocode_Mixin FS::Quotable_Mixin FS::Sales_Mixin
              FS::o2m_Common
@@ -1751,6 +1752,8 @@ sub check {
     || $self->ut_name('first')
     || $self->ut_snumbern('signupdate')
     || $self->ut_snumbern('birthdate')
+    || $self->ut_namen('spouse_last')
+    || $self->ut_namen('spouse_first')
     || $self->ut_snumbern('spouse_birthdate')
     || $self->ut_snumbern('anniversary_date')
     || $self->ut_textn('company')
@@ -4607,121 +4610,6 @@ sub search {
 =head1 SUBROUTINES
 
 =over 4
-
-=item batch_charge
-
-=cut
-
-sub batch_charge {
-  my $param = shift;
-  #warn join('-',keys %$param);
-  my $fh = $param->{filehandle};
-  my $agentnum = $param->{agentnum};
-  my $format = $param->{format};
-
-  my $extra_sql = ' AND '. $FS::CurrentUser::CurrentUser->agentnums_sql;
-
-  my @fields;
-  if ( $format eq 'simple' ) {
-    @fields = qw( custnum agent_custid amount pkg );
-  } else {
-    die "unknown format $format";
-  }
-
-  eval "use Text::CSV_XS;";
-  die $@ if $@;
-
-  my $csv = new Text::CSV_XS;
-  #warn $csv;
-  #warn $fh;
-
-  my $imported = 0;
-  #my $columns;
-
-  local $SIG{HUP} = 'IGNORE';
-  local $SIG{INT} = 'IGNORE';
-  local $SIG{QUIT} = 'IGNORE';
-  local $SIG{TERM} = 'IGNORE';
-  local $SIG{TSTP} = 'IGNORE';
-  local $SIG{PIPE} = 'IGNORE';
-
-  my $oldAutoCommit = $FS::UID::AutoCommit;
-  local $FS::UID::AutoCommit = 0;
-  my $dbh = dbh;
-  
-  #while ( $columns = $csv->getline($fh) ) {
-  my $line;
-  while ( defined($line=<$fh>) ) {
-
-    $csv->parse($line) or do {
-      $dbh->rollback if $oldAutoCommit;
-      return "can't parse: ". $csv->error_input();
-    };
-
-    my @columns = $csv->fields();
-    #warn join('-',@columns);
-
-    my %row = ();
-    foreach my $field ( @fields ) {
-      $row{$field} = shift @columns;
-    }
-
-    if ( $row{custnum} && $row{agent_custid} ) {
-      dbh->rollback if $oldAutoCommit;
-      return "can't specify custnum with agent_custid $row{agent_custid}";
-    }
-
-    my %hash = ();
-    if ( $row{agent_custid} && $agentnum ) {
-      %hash = ( 'agent_custid' => $row{agent_custid},
-                'agentnum'     => $agentnum,
-              );
-    }
-
-    if ( $row{custnum} ) {
-      %hash = ( 'custnum' => $row{custnum} );
-    }
-
-    unless ( scalar(keys %hash) ) {
-      $dbh->rollback if $oldAutoCommit;
-      return "can't find customer without custnum or agent_custid and agentnum";
-    }
-
-    my $cust_main = qsearchs('cust_main', { %hash } );
-    unless ( $cust_main ) {
-      $dbh->rollback if $oldAutoCommit;
-      my $custnum = $row{custnum} || $row{agent_custid};
-      return "unknown custnum $custnum";
-    }
-
-    if ( $row{'amount'} > 0 ) {
-      my $error = $cust_main->charge($row{'amount'}, $row{'pkg'});
-      if ( $error ) {
-        $dbh->rollback if $oldAutoCommit;
-        return $error;
-      }
-      $imported++;
-    } elsif ( $row{'amount'} < 0 ) {
-      my $error = $cust_main->credit( sprintf( "%.2f", 0-$row{'amount'} ),
-                                      $row{'pkg'}                         );
-      if ( $error ) {
-        $dbh->rollback if $oldAutoCommit;
-        return $error;
-      }
-      $imported++;
-    } else {
-      #hmm?
-    }
-
-  }
-
-  $dbh->commit or die $dbh->errstr if $oldAutoCommit;
-
-  return "Empty file!" unless $imported;
-
-  ''; #no error
-
-}
 
 =item notify CUSTOMER_OBJECT TEMPLATE_NAME OPTIONS
 

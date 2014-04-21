@@ -3,6 +3,10 @@
   /* font-family: Verdana, Arial, Helvetica, sans-serif; */
 }
 
+pre {
+  font-family: monospace;
+}
+
 A:link IMG, A:visited { border-style: none }
 /* A:focus {text-decoration: underline } */
 
@@ -277,4 +281,18 @@ td.grid {
 table.inv { border: none }
 th.inv { border: none }
 td.inv { border: none }
+
+td.label {
+  text-align: right;
+}
+
+.required {
+  font-weight: bold;
+}
+
+.required::before {
+  content: "* ";
+  color: #ff0000;
+}
+
 

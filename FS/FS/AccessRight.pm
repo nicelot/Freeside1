@@ -151,6 +151,8 @@ tie my %rights, 'Tie::IxHash',
     'Edit customer package comments', #NEW
     'Qualify service', #NEW
     'Waive setup fee', #NEW
+    'View appointments', #NEWNEW
+    'Make appointment',
   ],
   
   ###
@@ -230,6 +232,7 @@ tie my %rights, 'Tie::IxHash',
     'Refund Echeck payment',
     'Delete refund', #NEW
     'Add on-the-fly credit reason', #NEW
+    'Add on-the-fly refund reason', #NEW
   ],
   
   ###
@@ -352,8 +355,12 @@ tie my %rights, 'Tie::IxHash',
 
     'Edit package definitions',
     { rightname=>'Edit global package definitions', global=>1 },
-  
+    'Edit package definition costs',
+
     'Bulk edit package definitions',
+
+    'Edit fee definitions',
+    { rightname=>'Edit global fee definitions', global=>1 },
 
     'Edit billing events',
     { rightname=>'Edit global billing events', global=>1 },

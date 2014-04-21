@@ -1896,6 +1896,9 @@ sub batch_import {
   my $file    = $param->{file};
   my $params  = $param->{params} || {};
 
+  my $custnum_prefix = $conf->config('cust_main-custnum-display_prefix');
+  my $custnum_length = $conf->config('cust_main-custnum-display_length') || 8;
+
   my( $type, $header, $sep_char,
       $fixedlength_format, $xml_format, $asn_format,
       $parser_opt, $row_callback, @fields );
@@ -2178,6 +2181,11 @@ sub batch_import {
         $hash{$field} = $value if defined($value) && length($value);
       }
 
+    }
+
+    if ( $custnum_prefix && $hash{custnum} =~ /^$custnum_prefix(0*([1-9]\d*))$/
+                         && length($1) == $custnum_length ) {
+      $hash{custnum} = $2;
     }
 
     #my $table   = $param->{table};
@@ -2538,8 +2546,10 @@ sub ut_text {
   #warn "msgcat ". \&msgcat. "\n";
   #warn "notexist ". \&notexist. "\n";
   #warn "AUTOLOAD ". \&AUTOLOAD. "\n";
+  # \p{Word} = alphanumerics, marks (diacritics), and connectors
+  # see perldoc perluniprops
   $self->getfield($field)
-    =~ /^([\wô \!\@\#\$\%\&\(\)\-\+\;\:\'\"\,\.\?\/\=\[\]\<\>$money_char]+)$/u
+    =~ /^([\p{Word} \!\@\#\$\%\&\(\)\-\+\;\:\'\"\,\.\?\/\=\[\]\<\>$money_char]+)$/
       or return gettext('illegal_or_empty_text'). " $field: ".
                  $self->getfield($field);
   $self->setfield($field,$1);
@@ -2917,7 +2927,7 @@ May not be null.
 sub ut_name {
   my( $self, $field ) = @_;
 #  warn "ut_name allowed alphanumerics: +(sort grep /\w/, map { chr() } 0..255), "\n";
-  $self->getfield($field) =~ /^([\w \,\.\-\']+)$/
+  $self->getfield($field) =~ /^([\p{Word} \,\.\-\']+)$/
     or return gettext('illegal_name'). " $field: ". $self->getfield($field);
   my $name = $1;
   $name =~ s/^\s+//; 
@@ -3376,6 +3386,8 @@ sub _quote {
   my $column_obj = dbdef->table($table)->column($column);
   my $column_type = $column_obj->type;
   my $nullable = $column_obj->null;
+
+  utf8::upgrade($value);
 
   warn "  $table.$column: $value ($column_type".
        ( $nullable ? ' NULL' : ' NOT NULL' ).

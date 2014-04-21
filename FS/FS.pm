@@ -99,6 +99,10 @@ L<FS::access_groupagent> - Group reseller access
 
 L<FS::access_right> - Access rights
 
+L<FS::sched_item> - Installers / schedulable resources
+
+L<FS::sched_avail> - Installer/resource availability
+
 L<FS::svc_acct_pop> - POP (Point of Presence, not Post
 Office Protocol) class
 
@@ -375,6 +379,8 @@ L<FS::cust_location> - Customer location class
 L<FS::cust_main_Mixin> - Mixin class for records that contain fields from cust_main
 
 L<FS::cust_main_invoice> - Invoice destination class
+
+L<FS::cust_main_credit_limit> - Customer credit limit events class
 
 L<FS::cust_class> - Customer classification class
 
