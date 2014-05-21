@@ -184,7 +184,8 @@ sub myconnect {
       # Handle being passed a username
       $options = { user => $options };
   }
-  my $handle = DBI->connect( getsecrets($options), 
+  require MemcacheDBI;
+  my $handle = MemcacheDBI->connect( getsecrets($options), 
     { 'AutoCommit'         => 0,
       'ChopBlanks'         => 1,
       'ShowErrorStatement' => 1,
@@ -372,7 +373,7 @@ sub use_confcompat {
   $use_confcompat;
 }
 
-=item get_cached 
+=item get_cached
 
 Returns a cache object if configured
 
@@ -382,15 +383,21 @@ sub get_cached {
   return $cached ||= do{
     my $conf = new FS::Conf;
     if($conf->exists('memcache')){
-      require Cache::Memcached::Fast;
-      $cached = new Cache::Memcached::Fast {
+      my $memd_args = {
       #servers   => [ $conf->config( 'memcache-server' ) ],
         servers => ['localhost:11211'],
-        namespace => 'FS:',
+        namespace => 'FS2:',
         close_on_error => 1,
         max_failures => 3,
         failure_timeout => 2,
-      };  #TODO: OR DIE
+      };
+      if (ref $dbh eq 'MemcacheDBI') {
+        $dbh->memd_init($memd_args) unless $dbh->memd;  #TODO: OR DIE
+        $cached = $dbh->memd;
+      } else {
+        require Cache::Memcached::Fast;
+        $cached = new Cache::Memcached::Fast $memd_args; #TODO: OR DIE
+      }
     }
     $cached;
   }
