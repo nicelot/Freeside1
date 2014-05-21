@@ -367,6 +367,7 @@ sub qsearch {
   my @value = ();
   my @bind_type = ();
   my $dbh = dbh;
+  my $cached_result;
   foreach my $stable ( @stable ) {
     #stop altering the caller's hashref
     my $record      = { %{ shift(@record) || {} } };#and be liberal in receipt
@@ -386,9 +387,10 @@ sub qsearch {
     if( @stable == 1 && $cached && $record->{$pkey}){
       my $cached_key = $stable . '::'.$pkey.'::' . $record->{$pkey};
       my $cached_value = $cached->get( $cached_key );
-      if ($cached_value && ((ref $cached_value) =~ /^FS::/) ) {
+      if ($cached_value && ((ref $cached_value) eq 'HASH') ) {
         warn "FOUND CACHED VALUE - $cached_key" if $DEBUG > 2;
-        return ($cached_value);
+        $cached_result = $cached_value;
+        last;
       }
     }
 
@@ -452,6 +454,16 @@ sub qsearch {
     }
   }
 
+  my $table = $stable[0];
+  my $pkey = '';
+  $table = '' if grep { $_ ne $table } @stable;
+  $pkey = dbdef->table($table)->primary_key if $table;
+
+my %result;
+tie %result, "Tie::IxHash";
+if ($cached_result) {
+  $result{$cached_result->{$pkey}} = $cached_result;
+} else {
   my $statement = join( ' ) UNION ( ', @statement );
   $statement = "( $statement )" if scalar(@statement) > 1;
   $statement .= " $union_options{order_by}" if $union_options{order_by};
@@ -477,13 +489,6 @@ sub qsearch {
     croak $error;
   }
 
-  my $table = $stable[0];
-  my $pkey = '';
-  $table = '' if grep { $_ ne $table } @stable;
-  $pkey = dbdef->table($table)->primary_key if $table;
-
-  my %result;
-  tie %result, "Tie::IxHash";
   my @stuff = @{ $sth->fetchall_arrayref( {} ) };
   if ( $pkey && scalar(@stuff) && $stuff[0]->{$pkey} ) {
     %result = map { $_->{$pkey}, $_ } @stuff;
@@ -492,6 +497,16 @@ sub qsearch {
   }
 
   $sth->finish;
+
+  if ($cached) {
+    foreach my $record (@stuff) {
+      # this must be cached before decrypting data
+      my $cached_key = $table . '::'.$pkey.'::' . $record->{$pkey};
+      warn "[debug]$me Saving to cache: $cached_key\n" if $DEBUG > 1;
+      $cached->set($cached_key , $record); ##TODO: time and failure case
+    }
+  }
+}
 
   my @return;
   if ( eval 'scalar(@FS::'. $table. '::ISA);' ) {
@@ -512,15 +527,6 @@ sub qsearch {
       @return = map {
         eval 'FS::'. $table. '->new( { %{$_} } )';
       } values(%result);
-    }
-
-    if ($cached) {
-      foreach my $record (@return) {
-        # this must be cached before decrypting data
-        my $cached_key = $table . '::'.$pkey.'::' . $record->$pkey;
-        warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
-        $cached->set($cached_key , $record); ##TODO: time and failure case
-      }
     }
   } else {
     cluck "warning: FS::$table not loaded; returning FS::Record objects"
@@ -989,7 +995,6 @@ sub AUTOLOAD {
   # autoload is SLOW, lets push an actual sub in to make this 3x faster in future calls
   no strict 'refs'; ## no critic
   my $method = (ref $self).'::'.$field;
-  warn "[debug]$me creating autoload for $method\n" if $DEBUG > 1;
   *$method = sub {
       my ($self,$value) = @_;
       if ( defined($value) ) {
@@ -998,6 +1003,7 @@ sub AUTOLOAD {
         $self->getfield($field);
       }
   };
+  warn "[debug]$me created autoload cache for $method\n" if $DEBUG > 1;
 
   $self->$field($value);
 }

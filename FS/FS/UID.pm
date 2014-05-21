@@ -15,6 +15,7 @@ use FS::CurrentUser;
 use File::Slurp;  # Exports read_file
 use JSON;
 use Try::Tiny;
+use Config::General;
 
 @ISA = qw(Exporter);
 @EXPORT_OK = qw( checkeuid checkruid cgi setcgi adminsuidsetup forksuidsetup
@@ -178,24 +179,19 @@ sub callback_setup {
 }
 
 sub myconnect {
-<<<<<<< HEAD
   my $options = shift || {};
-  my $handle = DBI->connect( getsecrets($options), 
+  unless (ref $options) {
+      # Handle being passed a username
+      $options = { user => $options };
+  }
+  require MemcacheDBI;
+  my $handle = MemcacheDBI->connect( getsecrets($options), 
     { 'AutoCommit'         => 0,
       'ChopBlanks'         => 1,
       'ShowErrorStatement' => 1,
       'pg_enable_utf8'     => 1,
       #'mysql_enable_utf8'  => 1,
     })
-=======
-  my $handle = DBI->connect( getsecrets(), { 'AutoCommit'         => 0,
-                                            'ChopBlanks'         => 1,
-                                            'ShowErrorStatement' => 1,
-                                            'pg_enable_utf8'     => 1,
-                                            'mysql_enable_utf8'  => 1,
-                                          }
-                          )
->>>>>>> 9d0e461b89411c22fd6848384c4563b2dbe1c64d
     or die "DBI->connect error: $DBI::errstr\n";
 
     if ( $schema ) {
@@ -377,7 +373,7 @@ sub use_confcompat {
   $use_confcompat;
 }
 
-=item get_cached 
+=item get_cached
 
 Returns a cache object if configured
 
@@ -387,15 +383,21 @@ sub get_cached {
   return $cached ||= do{
     my $conf = new FS::Conf;
     if($conf->exists('memcache')){
-      require Cache::Memcached::Fast;
-      $cached = new Cache::Memcached::Fast {
+      my $memd_args = {
       #servers   => [ $conf->config( 'memcache-server' ) ],
         servers => ['localhost:11211'],
-        namespace => 'FS:',
+        namespace => 'FS2:',
         close_on_error => 1,
         max_failures => 3,
         failure_timeout => 2,
-      };  #TODO: OR DIE
+      };
+      if (ref $dbh eq 'MemcacheDBI') {
+        $dbh->memd_init($memd_args) unless $dbh->memd;  #TODO: OR DIE
+        $cached = $dbh->memd;
+      } else {
+        require Cache::Memcached::Fast;
+        $cached = new Cache::Memcached::Fast $memd_args; #TODO: OR DIE
+      }
     }
     $cached;
   }
