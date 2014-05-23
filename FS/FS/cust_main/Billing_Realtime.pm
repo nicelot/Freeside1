@@ -453,7 +453,7 @@ sub realtime_bop {
 
   if ( $namespace eq 'Business::OnlinePayment' ) {
 
-    if ( $options{method} eq 'CC' ) {
+    if ( $options{method} eq 'CC' || $options{method} eq 'PAYPAL' ) {
 
       my $tmp_payinfo = $options{payinfo};
       if ( $tmp_payinfo =~ s/^card_token:// ) {
