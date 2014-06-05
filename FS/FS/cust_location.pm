@@ -10,6 +10,8 @@ use FS::Conf;
 use FS::prospect_main;
 use FS::cust_main;
 use FS::cust_main_county;
+use FS::GeocodeCache;
+use Date::Format qw( time2str );
 
 $import = 0;
 
@@ -257,11 +259,11 @@ and replace methods.
 
 =cut
 
-#some false laziness w/cust_main, but since it should eventually lose these
-#fields anyway...
 sub check {
   my $self = shift;
   my $conf = new FS::Conf;
+
+  return '' if $self->disabled; # so that disabling locations never fails
 
   my $error = 
     $self->ut_numbern('locationnum')
@@ -320,6 +322,11 @@ sub check {
         'county'  => $self->county,
         'country' => $self->country,
       } );
+  }
+
+  # set coordinates, unless we already have them
+  if (!$import and !$self->latitude and !$self->longitude) {
+    $self->set_coord;
   }
 
   $self->SUPER::check;
@@ -424,9 +431,13 @@ sub move_to {
     }
   }
 
+  # find all packages that have the old location as their service address,
+  # and aren't canceled,
+  # and aren't supplemental to another package.
   my @pkgs = qsearch('cust_pkg', { 
       'locationnum' => $old->locationnum,
-      'cancel' => '' 
+      'cancel'      => '',
+      'main_pkgnum' => '',
     });
   foreach my $cust_pkg (@pkgs) {
     $error = $cust_pkg->change(
@@ -632,6 +643,147 @@ sub in_county_sql {
     }
     return $sql;
   }
+}
+
+=back
+
+=head2 SUBROUTINES
+
+=over 4
+
+=item process_censustract_update LOCATIONNUM
+
+Queueable function to update the census tract to the current year (as set in 
+the 'census_year' configuration variable) and retrieve the new tract code.
+
+=cut
+
+sub process_censustract_update {
+  eval "use FS::GeocodeCache";
+  die $@ if $@;
+  my $locationnum = shift;
+  my $cust_location = 
+    qsearchs( 'cust_location', { locationnum => $locationnum })
+      or die "locationnum '$locationnum' not found!\n";
+
+  my $conf = FS::Conf->new;
+  my $new_year = $conf->config('census_year') or return;
+  my $loc = FS::GeocodeCache->new( $cust_location->location_hash );
+  $loc->set_censustract;
+  my $error = $loc->get('censustract_error');
+  die $error if $error;
+  $cust_location->set('censustract', $loc->get('censustract'));
+  $cust_location->set('censusyear',  $new_year);
+  $error = $cust_location->replace;
+  die $error if $error;
+  return;
+}
+
+=item process_set_coord
+
+Queueable function to find and fill in coordinates for all locations that 
+lack them.  Because this uses the Google Maps API, it's internally rate
+limited and must run in a single process.
+
+=cut
+
+sub process_set_coord {
+  my $job = shift;
+  # avoid starting multiple instances of this job
+  my @others = qsearch('queue', {
+      'status'  => 'locked',
+      'job'     => $job->job,
+      'jobnum'  => {op=>'!=', value=>$job->jobnum},
+  });
+  return if @others;
+
+  $job->update_statustext('finding locations to update');
+  my @missing_coords = qsearch('cust_location', {
+      'disabled'  => '',
+      'latitude'  => '',
+      'longitude' => '',
+  });
+  my $i = 0;
+  my $n = scalar @missing_coords;
+  for my $cust_location (@missing_coords) {
+    $cust_location->set_coord;
+    my $error = $cust_location->replace;
+    if ( $error ) {
+      warn "error geocoding location#".$cust_location->locationnum.": $error\n";
+    } else {
+      $i++;
+      $job->update_statustext("updated $i / $n locations");
+      dbh->commit; # so that we don't have to wait for the whole thing to finish
+      # Rate-limit to stay under the Google Maps usage limit (2500/day).
+      # 86,400 / 35 = 2,468 lookups per day.
+    }
+    sleep 35;
+  }
+  if ( $i < $n ) {
+    die "failed to update ".$n-$i." locations\n";
+  }
+  return;
+}
+
+=item process_standardize [ LOCATIONNUMS ]
+
+Performs address standardization on locations with unclean addresses,
+using whatever method you have configured.  If the standardize_* method 
+returns a I<clean> address match, the location will be updated.  This is 
+always an in-place update (because the physical location is the same, 
+and is just being referred to by a more accurate name).
+
+Disabled locations will be skipped, as nobody cares.
+
+If any LOCATIONNUMS are provided, only those locations will be updated.
+
+=cut
+
+sub process_standardize {
+  my $job = shift;
+  my @others = qsearch('queue', {
+      'status'  => 'locked',
+      'job'     => $job->job,
+      'jobnum'  => {op=>'!=', value=>$job->jobnum},
+  });
+  return if @others;
+  my @locationnums = grep /^\d+$/, @_;
+  my $where = "AND locationnum IN(".join(',',@locationnums).")"
+    if scalar(@locationnums);
+  my @locations = qsearch({
+      table     => 'cust_location',
+      hashref   => { addr_clean => '', disabled => '' },
+      extra_sql => $where,
+  });
+  my $n_todo = scalar(@locations);
+  my $n_done = 0;
+
+  # special: log this
+  my $log;
+  eval "use Text::CSV";
+  open $log, '>', "$FS::UID::cache_dir/process_standardize-" . 
+                  time2str('%Y%m%d',time) .
+                  ".csv";
+  my $csv = Text::CSV->new({binary => 1, eol => "\n"});
+
+  foreach my $cust_location (@locations) {
+    $job->update_statustext( int(100 * $n_done/$n_todo) . ",$n_done / $n_todo locations" ) if $job;
+    my $result = FS::GeocodeCache->standardize($cust_location);
+    if ( $result->{addr_clean} and !$result->{error} ) {
+      my @cols = ($cust_location->locationnum);
+      foreach (keys %$result) {
+        push @cols, $cust_location->get($_), $result->{$_};
+        $cust_location->set($_, $result->{$_});
+      }
+      # bypass immutable field restrictions
+      my $error = $cust_location->FS::Record::replace;
+      warn "location ".$cust_location->locationnum.": $error\n" if $error;
+      $csv->print($log, \@cols);
+    }
+    $n_done++;
+    dbh->commit; # so that we can resume if interrupted
+  }
+  close $log;
 }
 
 =head1 BUGS

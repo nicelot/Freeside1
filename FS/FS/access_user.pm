@@ -11,9 +11,11 @@ use FS::access_user_pref;
 use FS::access_usergroup;
 use FS::agent;
 use FS::cust_main;
+use FS::sales;
 
 $DEBUG = 0;
 $me = '[FS::access_user]';
+$conf ||= new FS::Conf;
 
 =head1 NAME
 
@@ -213,6 +215,7 @@ sub check {
     || $self->ut_textn('last')
     || $self->ut_textn('first')
     || $self->ut_foreign_keyn('user_custnum', 'cust_main', 'custnum')
+    || $self->ut_foreign_keyn('report_salesnum', 'sales', 'salesnum')
     || $self->ut_enum('disabled', [ '', 'Y' ] )
   ;
   return $error if $error;
@@ -244,6 +247,18 @@ user.
 sub user_cust_main {
   my $self = shift;
   qsearchs( 'cust_main', { 'custnum' => $self->user_custnum } );
+}
+
+=item report_sales
+
+Returns the FS::sales object (see L<FS::sales>), if any, for this
+user.
+
+=cut
+
+sub report_sales {
+  my $self = shift;
+  qsearchs( 'sales', { 'salesnum' => $self->report_salesnum } );
 }
 
 =item access_usergroup

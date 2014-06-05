@@ -47,7 +47,7 @@ sub price_info {
 
 #some false laziness-ish w/agent.pm...  not a lot
 sub calc_recur {
-  my($self, $cust_pkg, $sdate, $details ) = @_;
+  my($self, $cust_pkg, $sdate, $details, $param ) = @_;
 
   my $conf = new FS::Conf;
   my $money_char = $conf->config('money_char') || '$';
@@ -58,10 +58,16 @@ sub calc_recur {
   my %n_setup = ();
   my %n_recur = ();
   my %part_svc_label = ();
+  my %pkg_svc = ();
 
   my $summarize = $self->option('summarize_svcs',1);
 
   foreach my $cust_svc ( $self->_bulk_cust_svc( $cust_pkg, $sdate ) ) {
+
+    my $pkg_svc = $pkg_svc{ $cust_pkg->pkgpart. '_'. $cust_svc->svcpart }
+                    ||= qsearchs('pkg_svc', { 'pkgpart' => $cust_pkg->pkgpart,
+                                              'svcpart' => $cust_svc->svcpart});
+    next if $pkg_svc->bulk_skip;
 
     my @label = $cust_svc->label_long( $$sdate, $last_bill );
     die "fatal: no label found, wtf?" unless scalar(@label); #?
@@ -100,10 +106,13 @@ sub calc_recur {
     }
   }
 
-  sprintf('%.2f', $self->base_recur($cust_pkg, $sdate) + $total_svc_charge );
-}
+  my $charge = $self->base_recur($cust_pkg, $sdate) + $total_svc_charge;
 
-sub can_discount { 0; }
+  $param->{'override_charges'} = $total_svc_charge / $self->freq;
+  my $discount = $self->calc_discount($cust_pkg, $sdate, $details, $param);
+
+  sprintf('%.2f', $charge - $discount );
+}
 
 sub hide_svc_detail { 1; }
 

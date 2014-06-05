@@ -36,7 +36,7 @@ $RT::URI::freeside::URL =~ m(^(https?://[^/]+)(/.*)?$)i;
 Set($WebBaseURL, $1);
 Set($WebPath, "$2/rt");
 
-Set($DatabaseHost   , '');
+Set($DatabaseHost   , 'casmysql.alpha.bluehost.com');
 
 # These settings are user-editable.
 

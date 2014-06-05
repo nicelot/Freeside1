@@ -1,8 +1,8 @@
-#!/usr/bin/perl -w
+#!/usr/bin/env perl
 
 use strict;
-use vars qw($opt_d $opt_s $opt_q $opt_v $opt_r);
-use vars qw($DEBUG $DRY_RUN);
+use vars qw( $opt_d $opt_s $opt_q $opt_v $opt_r $opt_c );
+use vars qw( $DEBUG $DRY_RUN );
 use Getopt::Std;
 use DBIx::DBSchema 0.31; #0.39
 use FS::UID qw(adminsuidsetup checkeuid datasrc driver_name);
@@ -17,7 +17,7 @@ my $start = time;
 
 die "Not running uid freeside!" unless checkeuid();
 
-getopts("dqrs");
+getopts("dqrcs");
 
 $DEBUG = !$opt_q;
 #$DEBUG = $opt_v;
@@ -27,6 +27,33 @@ $DRY_RUN = $opt_d;
 my $user = shift or die &usage;
 $FS::CurrentUser::upgrade_hack = 1;
 $FS::UID::callback_hack = 1;
+
+# Check for old secrets file format and upgrade, if neccessary
+my $secrets_file = "%%%FREESIDE_CONF%%%/secrets";
+my $conf = Config::General->new($secrets_file);
+
+unless ({$conf->getall}->{'server'}->{'main'}) {
+  warn "secrets file is not in Config::General format";
+  my ($datasrc, $db_user, $db_pass, $schema) = 
+    map { /^(.*)$/; $1 } readline(new IO::File $secrets_file);
+
+  my $new_config = {
+    server => {
+      'main'   => {
+        ServerType  => 'ReadWrite',
+        DSN     => $datasrc,
+        Username  => $db_user,
+        Password  => $db_pass,
+      }
+    }
+  };
+
+  $new_config->{'server'}->{'main'}->{'Schema'} = $schema
+    if $schema;
+
+  my $content = $conf->save_string($secrets_file, $new_config);
+}
+
 my $dbh = adminsuidsetup($user);
 $FS::UID::callback_hack = 0;
 
@@ -84,6 +111,13 @@ if ( dbdef->table('areacode') and
   }
 }
 
+if ( dbdef->table('upgrade_journal') ) {
+  push @bugfix, "SELECT SETVAL( 'upgrade_journal_upgradenum_seq',
+                                ( SELECT MAX(upgradenum) FROM upgrade_journal )
+                              )
+                ";
+}
+
 if ( $DRY_RUN ) {
   print
     join(";\n", @bugfix ). ";\n";
@@ -107,7 +141,14 @@ if ( $DRY_RUN ) {
 #from 1.3 to 1.4... if not, it needs to be hooked into -upgrade here or
 #you'll lose all the part_svc settings it migrates to part_svc_column
 
-my @statements = dbdef->sql_update_schema( dbdef_dist(datasrc),
+my $conf = new FS::Conf;
+
+my $dbdef_dist = dbdef_dist(
+  datasrc,
+  { 'queue-no_history' => $conf->exists('queue-no_history') },
+);
+
+my @statements = dbdef->sql_update_schema( $dbdef_dist,
                                            $dbh,
                                            { 'nullify_default' => 1, },
                                          );
@@ -145,6 +186,18 @@ unless ( driver_name =~ /^mysql/i ) {
   @statements =
     grep { $_ !~ /^ *ALTER +TABLE +h_queue +ALTER +COLUMN +job +TYPE +varchar\(512\) *$/i }
          @statements;
+}
+
+if ( $opt_c ) {
+
+  @statements =
+    grep { $_ !~ /^ *ALTER +TABLE +(h_)?cdr /i }
+         @statements;
+
+  @statements =
+    grep { $_ !~ /^ *CREATE +INDEX +(h_)?cdr\d+ /i }
+         @statements;
+
 }
 
 if ( $DRY_RUN ) {
@@ -305,7 +358,7 @@ freeside-upgrade - Upgrades database schema for new freeside verisons.
 
 =head1 SYNOPSIS
 
-  freeside-upgrade [ -d ] [ -r ] [ -s ] [ -q | -v ]
+  freeside-upgrade [ -d ] [ -r ] [ -c ] [ -s ] [ -q | -v ]
 
 =head1 DESCRIPTION
 
@@ -329,6 +382,8 @@ Also performs other upgrade functions:
 
   [ -r ]: Skip sqlradius updates.  Useful for occassions where the sqlradius
           databases may be inaccessible.
+
+  [ -c ]: Skip cdr and h_cdr updates.
 
   [ -v ]: Run verbosely, sending debugging information to STDERR.  This is the
           current default.

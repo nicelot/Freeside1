@@ -1,62 +1,62 @@
 package FS::Record;
+use base qw( Exporter );
 
 use strict;
-use vars qw( $AUTOLOAD @ISA @EXPORT_OK $DEBUG
+use vars qw( $AUTOLOAD
              %virtual_fields_cache
-             $conf $conf_encryption $money_char $lat_lower $lon_upper
-             $me
-             $nowarn_identical $nowarn_classload
-             $no_update_diff $no_check_foreign
-             @encrypt_payby
+             $money_char $lat_lower $lon_upper
            );
-use Exporter;
 use Carp qw(carp cluck croak confess);
 use Scalar::Util qw( blessed );
-use File::CounterFile;
-use Locale::Country;
-use Text::CSV_XS;
 use File::Slurp qw( slurp );
+use File::CounterFile;
+use Text::CSV_XS;
 use DBI qw(:sql_types);
-use DBIx::DBSchema 0.38;
+use DBIx::DBSchema 0.43; #0.43 for foreign keys
+use Locale::Country;
+use Locale::Currency;
+use NetAddr::IP; # for validation
 use FS::UID qw(dbh datasrc driver_name);
 use FS::CurrentUser;
 use FS::Schema qw(dbdef);
 use FS::SearchCache;
 use FS::Msgcat qw(gettext);
-use NetAddr::IP; # for validation
-use Data::Dumper;
+use JSON qw(to_json);
 #use FS::Conf; #dependency loop bs, in install_callback below instead
+use Data::Dumper;
 
 use FS::part_virtual_field;
 
 use Tie::IxHash;
 
-@ISA = qw(Exporter);
-
-@encrypt_payby = qw( CARD DCRD CHEK DCHK );
+our @encrypt_payby = qw( CARD DCRD CHEK DCHK );
 
 #export dbdef for now... everything else expects to find it here
-@EXPORT_OK = qw(
+our @EXPORT_OK = qw(
   dbh fields hfields qsearch qsearchs dbdef jsearch
   str2time_sql str2time_sql_closing regexp_sql not_regexp_sql concat_sql
   midnight_sql
 );
 
-$DEBUG = 0;
-$me = '[FS::Record]';
+our $DEBUG = 0;
+our $me = '[FS::Record]';
 
-$nowarn_identical = 0;
-$nowarn_classload = 0;
-$no_update_diff = 0;
-$no_check_foreign = 0;
+our $nowarn_identical = 0;
+our $nowarn_classload = 0;
+our $no_update_diff = 0;
+our $no_history = 0;
+
+our $no_check_foreign = 1; #well, not inefficiently in perl by default anymore
 
 my $rsa_module;
 my $rsa_loaded;
 my $rsa_encrypt;
 my $rsa_decrypt;
 
-$conf = '';
-$conf_encryption = '';
+our $conf = '';
+our $conf_encryption = '';
+our $cached;
+
 FS::UID->install_callback( sub {
 
   eval "use FS::Conf;";
@@ -77,6 +77,7 @@ FS::UID->install_callback( sub {
     eval "sub PG_BYTEA { die 'guru meditation #9: calling PG_BYTEA when not running Pg?'; }";
   }
 
+  $cached = FS::UID::get_cached;
 } );
 
 =head1 NAME
@@ -369,13 +370,6 @@ sub qsearch {
   foreach my $stable ( @stable ) {
     #stop altering the caller's hashref
     my $record      = { %{ shift(@record) || {} } };#and be liberal in receipt
-    my $select      = shift @select;
-    my $extra_sql   = shift @extra_sql;
-    my $extra_param = shift @extra_param;
-    my $order_by    = shift @order_by;
-    my $cache       = shift @cache;
-    my $addl_from   = shift @addl_from;
-    my $debug       = shift @debug;
 
     #$stable =~ /^([\w\_]+)$/ or die "Illegal table: $table";
     #for jsearch
@@ -387,6 +381,24 @@ sub qsearch {
       or die "No schema for table $table found - ".
              "do you need to run freeside-upgrade?";
     my $pkey = $dbdef_table->primary_key;
+
+    ##TODO: if one table/keyed lookup, try cache...
+    if( @stable == 1 && $cached && $record->{$pkey}){
+      my $cached_key = $stable . '::'.$pkey.'::' . $record->{$pkey};
+      my $cached_value = $cached->get( $cached_key );
+      if ($cached_value && ((ref $cached_value) =~ /^FS::/) ) {
+        warn "FOUND CACHED VALUE - $cached_key" if $DEBUG > 2;
+        return ($cached_value);
+      }
+    }
+
+    my $select      = shift @select;
+    my $extra_sql   = shift @extra_sql;
+    my $extra_param = shift @extra_param;
+    my $order_by    = shift @order_by;
+    my $cache       = shift @cache;
+    my $addl_from   = shift @addl_from;
+    my $debug       = shift @debug;
 
     my @real_fields = grep exists($record->{$_}), real_fields($table);
 
@@ -403,7 +415,6 @@ sub qsearch {
     push @statement, $statement;
 
     warn "[debug]$me $statement\n" if $DEBUG > 1 || $debug;
- 
 
     foreach my $field (
       grep defined( $record->{$_} ) && $record->{$_} ne '', @real_fields
@@ -503,10 +514,212 @@ sub qsearch {
       } values(%result);
     }
 
+    if ($cached) {
+      foreach my $record (@return) {
+        # this must be cached before decrypting data
+        my $cached_key = $table . '::'.$pkey.'::' . $record->$pkey;
+        warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
+        $cached->set($cached_key , $record); ##TODO: time and failure case
+      }
+    }
+  } else {
+    cluck "warning: FS::$table not loaded; returning FS::Record objects"
+      unless $nowarn_classload;
+    warn "[debug]$me WTF?\n" if $DEBUG> 1;
+    @return = map {
+      FS::Record->new( $table, { %{$_} } );
+    } values(%result);
+  }
+  return @return;
+}
+
+=item _query
+
+Construct the SQL statement and parameter-binding list for qsearch.  Takes
+the qsearch parameters.
+
+Returns a hash containing:
+'table':      The primary table name (if there is one).
+'statement':  The SQL statement itself.
+'bind_type':  An arrayref of bind types.
+'value':      An arrayref of parameter values.
+'cache':      The cache object, if one was passed.
+
+=cut
+
+sub _query {
+  my( @stable, @record, @cache );
+  my( @select, @extra_sql, @extra_param, @order_by, @addl_from );
+  my @debug = ();
+  my $cursor = '';
+  my %union_options = ();
+  if ( ref($_[0]) eq 'ARRAY' ) {
+    my $optlist = shift;
+    %union_options = @_;
+    foreach my $href ( @$optlist ) {
+      push @stable,      ( $href->{'table'} or die "table name is required" );
+      push @record,      ( $href->{'hashref'}     || {} );
+      push @select,      ( $href->{'select'}      || '*' );
+      push @extra_sql,   ( $href->{'extra_sql'}   || '' );
+      push @extra_param, ( $href->{'extra_param'} || [] );
+      push @order_by,    ( $href->{'order_by'}    || '' );
+      push @cache,       ( $href->{'cache_obj'}   || '' );
+      push @addl_from,   ( $href->{'addl_from'}   || '' );
+      push @debug,       ( $href->{'debug'}       || '' );
+    }
+    die "at least one hashref is required" unless scalar(@stable);
+  } elsif ( ref($_[0]) eq 'HASH' ) {
+    my $opt = shift;
+    $stable[0]      = $opt->{'table'}       or die "table name is required";
+    $record[0]      = $opt->{'hashref'}     || {};
+    $select[0]      = $opt->{'select'}      || '*';
+    $extra_sql[0]   = $opt->{'extra_sql'}   || '';
+    $extra_param[0] = $opt->{'extra_param'} || [];
+    $order_by[0]    = $opt->{'order_by'}    || '';
+    $cache[0]       = $opt->{'cache_obj'}   || '';
+    $addl_from[0]   = $opt->{'addl_from'}   || '';
+    $debug[0]       = $opt->{'debug'}       || '';
+  } else {
+    ( $stable[0],
+      $record[0],
+      $select[0],
+      $extra_sql[0],
+      $cache[0],
+      $addl_from[0]
+    ) = @_;
+    $select[0] ||= '*';
+  }
+  my $cache = $cache[0];
+
+  my @statement = ();
+  my @value = ();
+  my @bind_type = ();
+
+  my $result_table = $stable[0];
+  foreach my $stable ( @stable ) {
+    #stop altering the caller's hashref
+    my $record      = { %{ shift(@record) || {} } };#and be liberal in receipt
+    my $select      = shift @select;
+    my $extra_sql   = shift @extra_sql;
+    my $extra_param = shift @extra_param;
+    my $order_by    = shift @order_by;
+    my $cache       = shift @cache;
+    my $addl_from   = shift @addl_from;
+    my $debug       = shift @debug;
+
+    #$stable =~ /^([\w\_]+)$/ or die "Illegal table: $table";
+    #for jsearch
+    $stable =~ /^([\w\s\(\)\.\,\=]+)$/ or die "Illegal table: $stable";
+    $stable = $1;
+
+    $result_table = '' if $result_table ne $stable;
+
+    my $table = $cache ? $cache->table : $stable;
+    my $dbdef_table = dbdef->table($table)
+      or die "No schema for table $table found - ".
+             "do you need to run freeside-upgrade?";
+    my $pkey = $dbdef_table->primary_key;
+
+    my @real_fields = grep exists($record->{$_}), real_fields($table);
+
+    my $statement .= "SELECT $select FROM $stable";
+    $statement .= " $addl_from" if $addl_from;
+    if ( @real_fields ) {
+      $statement .= ' WHERE '. join(' AND ',
+        get_real_fields($table, $record, \@real_fields));
+    }
+
+    $statement .= " $extra_sql" if defined($extra_sql);
+    $statement .= " $order_by"  if defined($order_by);
+
+    push @statement, $statement;
+
+    warn "[debug]$me $statement\n" if $DEBUG > 1 || $debug;
+ 
+
+    foreach my $field (
+      grep defined( $record->{$_} ) && $record->{$_} ne '', @real_fields
+    ) {
+
+      my $value = $record->{$field};
+      my $op = (ref($value) && $value->{op}) ? $value->{op} : '=';
+      $value = $value->{'value'} if ref($value);
+      my $type = dbdef->table($table)->column($field)->type;
+
+      my $bind_type = _bind_type($type, $value);
+
+      #if ( $DEBUG > 2 ) {
+      #  no strict 'refs';
+      #  %TYPE = map { &{"DBI::$_"}() => $_ } @{ $DBI::EXPORT_TAGS{sql_types} }
+      #    unless keys %TYPE;
+      #  warn "  bind_param $bind (for field $field), $value, TYPE $TYPE{$TYPE}\n";
+      #}
+
+      push @value, $value;
+      push @bind_type, $bind_type;
+
+    }
+
+    foreach my $param ( @$extra_param ) {
+      my $bind_type = { TYPE => SQL_VARCHAR };
+      my $value = $param;
+      if ( ref($param) ) {
+        $value = $param->[0];
+        my $type = $param->[1];
+        $bind_type = _bind_type($type, $value);
+      }
+      push @value, $value;
+      push @bind_type, $bind_type;
+    }
+  }
+
+  my $statement = join( ' ) UNION ( ', @statement );
+  $statement = "( $statement )" if scalar(@statement) > 1;
+  $statement .= " $union_options{order_by}" if $union_options{order_by};
+
+  return {
+    statement => $statement,
+    bind_type => \@bind_type,
+    value     => \@value,
+    table     => $result_table,
+    cache     => $cache,
+  };
+}
+
+# qsearch should eventually use this
+sub _from_hashref {
+  my ($table, $cache, @hashrefs) = @_;
+  my @return;
+  # XXX get rid of these string evals at some point
+  # (when we have time to test it)
+  # my $class = "FS::$table" if $table;
+  # if ( $class and $class->isa('FS::Record') )
+  #   if ( $class->can('new') eq \&new )
+  #
+  if ( $table && eval 'scalar(@FS::'. $table. '::ISA);' ) {
+    if ( eval 'FS::'. $table. '->can(\'new\')' eq \&new ) {
+      #derivied class didn't override new method, so this optimization is safe
+      if ( $cache ) {
+        @return = map {
+          new_or_cached( "FS::$table", { %{$_} }, $cache )
+        } @hashrefs;
+      } else {
+        @return = map {
+          new( "FS::$table", { %{$_} } )
+        } @hashrefs;
+      }
+    } else {
+      #okay, its been tested
+      # warn "untested code (class FS::$table uses custom new method)";
+      @return = map {
+        eval 'FS::'. $table. '->new( { %{$_} } )';
+      } @hashrefs;
+    }
+
     # Check for encrypted fields and decrypt them.
    ## only in the local copy, not the cached object
     if ( $conf_encryption 
-         && eval 'defined(@FS::'. $table . '::encrypted_fields)' ) {
+         && eval '@FS::'. $table . '::encrypted_fields' ) {
       foreach my $record (@return) {
         foreach my $field (eval '@FS::'. $table . '::encrypted_fields') {
           next if $field eq 'payinfo' 
@@ -524,7 +737,7 @@ sub qsearch {
       unless $nowarn_classload;
     @return = map {
       FS::Record->new( $table, { %{$_} } );
-    } values(%result);
+    } @hashrefs;
   }
   return @return;
 }
@@ -764,15 +977,29 @@ sub AUTOLOAD {
   my($self,$value)=@_;
   my($field)=$AUTOLOAD;
   $field =~ s/.*://;
+
   if ( defined($value) ) {
     confess "errant AUTOLOAD $field for $self (arg $value)"
       unless blessed($self) && $self->can('setfield');
-    $self->setfield($field,$value);
   } else {
     confess "errant AUTOLOAD $field for $self (no args)"
       unless blessed($self) && $self->can('getfield');
-    $self->getfield($field);
-  }    
+  }
+
+  # autoload is SLOW, lets push an actual sub in to make this 3x faster in future calls
+  no strict 'refs'; ## no critic
+  my $method = (ref $self).'::'.$field;
+  warn "[debug]$me creating autoload for $method\n" if $DEBUG > 1;
+  *$method = sub {
+      my ($self,$value) = @_;
+      if ( defined($value) ) {
+        $self->setfield($field,$value);
+      } else {
+        $self->getfield($field);
+      }
+  };
+
+  $self->$field($value);
 }
 
 # efficient
@@ -814,6 +1041,22 @@ methods, speak up.
 sub hashref {
   my($self) = @_;
   $self->{'Hash'};
+}
+
+=item json
+
+Returns a json representation of the hashref method
+
+=cut
+
+sub json  {
+  my($self) = @_;
+  to_json($self->{'Hash'});
+}
+
+sub TO_JSON {
+  my($self) = @_;
+  return $self->{'Hash'};
 }
 
 =item modified
@@ -948,6 +1191,7 @@ sub insert {
                 && $self->payby
                 && !grep { $self->payby eq $_ } @encrypt_payby;
       $saved->{$field} = $self->getfield($field);
+      $self->{'decrypted'}->{$field} = 0 if $self->{'decrypted'}->{$field};
       $self->setfield($field, $self->encrypt($self->getfield($field)));
     }
   }
@@ -1046,7 +1290,7 @@ sub insert {
   }
 
   my $h_sth;
-  if ( defined dbdef->table('h_'. $table) ) {
+  if ( defined( dbdef->table('h_'. $table) ) && ! $no_history ) {
     my $h_statement = $self->_h_statement('insert');
     warn "[debug]$me $h_statement\n" if $DEBUG > 2;
     $h_sth = dbh->prepare($h_statement) or do {
@@ -1060,11 +1304,16 @@ sub insert {
 
   dbh->commit or croak dbh->errstr if $FS::UID::AutoCommit;
 
-  # Now that it has been saved, reset the encrypted fields so that $new 
-  # can still be used.
-  foreach my $field (keys %{$saved}) {
-    $self->setfield($field, $saved->{$field});
+  if ($cached) {
+      # clear the cache
+      my $cached_key = $table . '::'.$primary_key.'::' . $self->$primary_key;
+      warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
+      $cached->set($cached_key , $self); ##TODO: time and failure case
   }
+
+  # Now that it has been saved, reset the encrypted fields so that $new
+  # can still be used.
+  $self->{'decrypted'} = {} if $self->{'decrypted'};
 
   '';
 }
@@ -1130,6 +1379,13 @@ sub delete {
   
   dbh->commit or croak dbh->errstr if $FS::UID::AutoCommit;
 
+  if ($cached) {
+      # clear the cache
+      my $cached_key = $self->table . '::'.$primary_key.'::' . $self->$primary_key;
+      warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
+      $cached->delete($cached_key); ##TODO: time and failure case
+  }
+
   #no need to needlessly destoy the data either (causes problems actually)
   #undef $self; #no need to keep object!
 
@@ -1191,6 +1447,7 @@ sub replace {
                 && $new->payby
                 && !grep { $new->payby eq $_ } @encrypt_payby;
       $saved->{$field} = $new->getfield($field);
+      $new->{'decrypted'}->{$field} = 0 if $new->{'decrypted'}->{$field};
       $new->setfield($field, $new->encrypt($new->getfield($field)));
     }
   }
@@ -1271,11 +1528,16 @@ sub replace {
 
   dbh->commit or croak dbh->errstr if $FS::UID::AutoCommit;
 
-  # Now that it has been saved, reset the encrypted fields so that $new 
-  # can still be used.
-  foreach my $field (keys %{$saved}) {
-    $new->setfield($field, $saved->{$field});
+  if ($cached) {
+      # clear the cache
+      my $cached_key = $new->table . '::'.$primary_key.'::' . $new->$primary_key;
+      warn "[debug]$me Setting object to cache: $cached_key\n" if $DEBUG > 1;
+      $cached->set($cached_key , $new); ##TODO: time and failure case
   }
+
+  # Now that it has been saved, reset the encrypted fields so that $new
+  # can still be used.
+  $new->{'decrypted'} = {} if $new->{'decrypted'};
 
   '';
 
@@ -1428,7 +1690,6 @@ files.  Currently only supports a single file named "file".
 =cut
 
 use Storable qw(thaw);
-use Data::Dumper;
 use MIME::Base64;
 sub process_batch_import {
   my($job, $opt) = ( shift, shift );
@@ -1907,10 +2168,10 @@ sub _h_statement {
   my @values = map { _quote( $self->getfield($_), $self->table, $_) } @fields;
 
   "INSERT INTO h_". $self->table. " ( ".
-      join(', ', qw(history_date history_user history_action), @fields ).
+      join(', ', qw(history_date history_usernum history_action), @fields ).
     ") VALUES (".
       join(', ', $time,
-                 dbh->quote( $FS::CurrentUser::CurrentUser->username ),
+                 $FS::CurrentUser::CurrentUser->usernum,
                  dbh->quote($action),
                  @values
       ).
@@ -2129,6 +2390,41 @@ sub ut_moneyn {
   $self->ut_money($field);
 }
 
+=item ut_currencyn COLUMN
+
+Check/untaint currency indicators, such as USD or EUR.  May be null.  If there
+is an error, returns the error, otherwise returns false.
+
+=cut
+
+sub ut_currencyn {
+  my($self, $field) = @_;
+  if ($self->getfield($field) eq '') { #can be null
+    $self->setfield($field, '');
+    return '';
+  }
+  $self->ut_currency($field);
+}
+
+=item ut_currency COLUMN
+
+Check/untaint currency indicators, such as USD or EUR.  May not be null.  If
+there is an error, returns the error, otherwise returns false.
+
+=cut
+
+sub ut_currency {
+  my($self, $field) = @_;
+  my $value = uc( $self->getfield($field) );
+  if ( code2currency($value) ) {
+    $self->setfield($value);
+  } else {
+    return "Unknown currency $value";
+  }
+
+  '';
+}
+
 =item ut_text COLUMN
 
 Check/untaint text.  Alphanumerics, spaces, and the following punctuation
@@ -2144,7 +2440,7 @@ sub ut_text {
   #warn "notexist ". \&notexist. "\n";
   #warn "AUTOLOAD ". \&AUTOLOAD. "\n";
   $self->getfield($field)
-    =~ /^([\wô \!\@\#\$\%\&\(\)\-\+\;\:\'\"\,\.\?\/\=\[\]\<\>$money_char]+)$/
+    =~ /^([\wô \!\@\#\$\%\&\(\)\-\+\;\:\'\"\,\.\?\/\=\[\]\<\>$money_char]+)$/u
       or return gettext('illegal_or_empty_text'). " $field: ".
                  $self->getfield($field);
   $self->setfield($field,$1);
@@ -2243,10 +2539,14 @@ sub ut_phonen {
   if ( $phonen eq '' ) {
     $self->setfield($field,'');
   } elsif ( $country eq 'US' || $country eq 'CA' ) {
+    # only allow EXT characters (extentions)
+    return gettext('illegal_phone'). " $field: ". $self->getfield($field)
+      if $phonen =~ m/[a-df-su-wy-z]/i;
     $phonen =~ s/\D//g;
     $phonen = $conf->config('cust_main-default_areacode').$phonen
       if length($phonen)==7 && $conf->config('cust_main-default_areacode');
-    $phonen =~ /^(\d{3})(\d{3})(\d{4})(\d*)$/
+    # remove leading 1 (national dialing prefix) if supplied
+    $phonen =~ m/^1?(\d{3})(\d{3})(\d{4})(\d*)$/
       or return gettext('illegal_phone'). " $field: ". $self->getfield($field);
     $phonen = "$1-$2-$3";
     $phonen .= " x$4" if $4;
@@ -2763,7 +3063,7 @@ You should generally not have to worry about calling this, as the system handles
 
 sub encrypt {
   my ($self, $value) = @_;
-  my $encrypted;
+  my $encrypted = $value;
 
   if ($conf->exists('encryption')) {
     if ($self->is_encrypted($value)) {
@@ -2793,13 +3093,8 @@ Checks to see if the string is encrypted and returns true or false (1/0) to indi
 
 sub is_encrypted {
   my ($self, $value) = @_;
-  # Possible Bug - Some work may be required here....
-
-  if ($value =~ /^M/ && length($value) > 80) {
-    return 1;
-  } else {
-    return 0;
-  }
+  # could be more precise about it, but this will do for now
+  $value =~ /^M/ && length($value) > 80;
 }
 
 =item decrypt($value)
@@ -2834,8 +3129,8 @@ sub loadRSA {
     }
 
     if (!$rsa_loaded) {
-	eval ("require $rsa_module"); # No need to import the namespace
-	$rsa_loaded++;
+      eval ("require $rsa_module"); # No need to import the namespace
+      $rsa_loaded++;
     }
     # Initialize Encryption
     if ($conf->exists('encryptionpublickey') && $conf->config('encryptionpublickey') ne '') {

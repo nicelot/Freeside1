@@ -91,9 +91,11 @@ sub load_user {
   $CurrentUser;
 }
 
-=item new_session
+=item new_session [SESSION_KEY]
 
 Creates a new session for the current user and returns the session key
+
+If a session key is not provided then a random one will be automatically created.
 
 =cut
 
@@ -101,13 +103,17 @@ use vars qw( @saltset );
 @saltset = ( 'a'..'z' , 'A'..'Z' , '0'..'9' , '+' , '/' );
 
 sub new_session {
-  my( $class ) = @_;
+  my( $class, $sessionkey ) = @_;
 
   #not the best thing in the world...
   eval "use FS::access_user_session;";
   die $@ if $@;
 
-  my $sessionkey = join('', map $saltset[int(rand(scalar @saltset))], 0..39);
+  if ( $sessionkey && $sessionkey ne '1' && lc($sessionkey) ne 'true' ) {
+    die 'Invalid session length' if length($sessionkey) < 20 || length($sessionkey) > 80;
+  } else {
+    $sessionkey = join('', map $saltset[int(rand(scalar @saltset))], 0..39);
+  }
 
   my $access_user_session = new FS::access_user_session {
     'sessionkey' => $sessionkey,

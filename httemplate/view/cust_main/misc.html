@@ -52,6 +52,13 @@
      </TR>
 %  #}
 
+% if ( $cust_main->salesnum ) {
+    <TR>
+      <TD ALIGN="right"><% mt('Sales Person') |h %></TD>
+      <TD BGCOLOR="#ffffff"><% $cust_main->salesperson |h %></TD>
+    </TR>
+% }
+
 %  unless ( FS::part_referral->num_part_referral == 1 ) {
 %    my $referral = qsearchs('part_referral', {
 %      'refnum' => $cust_main->refnum
@@ -160,17 +167,6 @@
   <TR>
     <TD ALIGN="right"><% mt('Anniversary Date') |h %></TD>
     <TD BGCOLOR="#ffffff"><% $dt ? $dt->strftime($date_format) : '' %></TD>
-  </TR>
-
-% }
-
-% if ( $conf->exists('cust_main-require_censustract') ) {
-
-  <TR>
-    <TD ALIGN="right">
-      <% mt('Census tract ([_1])', $cust_main->ship_location->censusyear) |h %>
-    </TD>
-    <TD BGCOLOR="#ffffff"><% $cust_main->ship_location->censustract  %></TD>
   </TR>
 
 % }

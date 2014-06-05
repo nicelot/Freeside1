@@ -2,9 +2,12 @@ package FS::svc_phone;
 
 use strict;
 use base qw( FS::svc_Domain_Mixin FS::location_Mixin FS::svc_Common );
-use vars qw( $DEBUG $me @pw_set $conf $phone_name_max );
+use vars qw( $DEBUG $me @pw_set $conf $phone_name_max
+             $passwordmin $passwordmax
+           );
 use Data::Dumper;
 use Scalar::Util qw( blessed );
+use List::Util qw( min );
 use FS::Conf;
 use FS::Record qw( qsearch qsearchs dbh );
 use FS::PagedSearch qw( psearch );
@@ -26,6 +29,8 @@ $DEBUG = 0;
 FS::UID->install_callback( sub { 
   $conf = new FS::Conf;
   $phone_name_max = $conf->config('svc_phone-phone_name-max_length');
+  $passwordmin = $conf->config('sip_passwordmin') || 0;
+  $passwordmax = $conf->config('sip_passwordmax') || 80;
 }
 );
 
@@ -173,6 +178,15 @@ sub table_info {
                          select_label => 'domain',
                          disable_inventory => 1,
                        },
+        'sms_carrierid'    => { label             => 'SMS Carrier',
+                                type              => 'select',
+                                select_table      => 'cdr_carrier',
+                                select_key        => 'carrierid',
+                                select_label      => 'carriername',
+                                disable_inventory => 1,
+                              },
+        'sms_account'      => { label => 'SMS Carrier Account', },
+        'max_simultaneous' => { label=>'Maximum number of simultaneous users' },
         'locationnum' => {
                            label => 'E911 location',
                            disable_inventory => 1,
@@ -358,8 +372,6 @@ sub delete {
 
 }
 
-# the delete method can be inherited from FS::Record
-
 =item replace OLD_RECORD
 
 Replaces the OLD_RECORD with this one in the database.  If there is an error,
@@ -477,6 +489,9 @@ sub check {
     || $self->ut_textn('phone_name')
     || $self->ut_foreign_keyn('pbxsvc', 'svc_pbx',    'svcnum' )
     || $self->ut_foreign_keyn('domsvc', 'svc_domain', 'svcnum' )
+    || $self->ut_foreign_keyn('sms_carrierid', 'cdr_carrier', 'carrierid' )
+    || $self->ut_alphan('sms_account')
+    || $self->ut_numbern('max_simultaneous')
     || $self->ut_foreign_keyn('locationnum', 'cust_location', 'locationnum')
     || $self->ut_numbern('forwarddst')
     || $self->ut_textn('email')
@@ -517,17 +532,24 @@ sub check {
 
   unless ( length($self->pin) ) {
     my $random_pin = $conf->config('svc_phone-random_pin');
-    if ( $random_pin =~ /^\d+$/ ) {
+    if ( defined($random_pin) && $random_pin =~ /^\d+$/ ) {
       $self->pin(
         join('', map int(rand(10)), 0..($random_pin-1))
       );
     }
   }
 
-  unless ( length($self->sip_password) ) { # option for this?
+  if ( length($self->sip_password) ) {
+
+    return "SIP password must be longer than $passwordmin characters"
+      if length($self->sip_password) < $passwordmin;
+    return "SIP password must be shorter than $passwordmax characters"
+      if length($self->sip_password) > $passwordmax;
+
+  } else { # option for this?
 
     $self->sip_password(
-      join('', map $pw_set[ int(rand $#pw_set) ], (0..16) )
+      join('', map $pw_set[ int(rand $#pw_set) ], (1..min($passwordmax,16)) )
     );
 
   }
@@ -628,13 +650,39 @@ sub radius_check {
 
   my $conf = new FS::Conf;
 
-  $check{'User-Password'} = $conf->config('svc_phone-radius-default_password');
+  my $password;
+  if ( $conf->config('svc_phone-radius-password') eq 'countrycode_phonenum' ) {
+    $password = $self->countrycode. $self->phonenum;
+  } else {
+    $password = $conf->config('svc_phone-radius-default_password');
+  }
+  $check{'User-Password'} = $password;
 
   %check;
 }
 
 sub radius_groups {
   ();
+}
+
+=item sms_cdr_carrier
+
+=cut
+
+sub sms_cdr_carrier {
+  my $self = shift;
+  return '' unless $self->sms_carrierid;
+  qsearchs('cdr_carrier',  { 'carrierid' => $self->sms_carrierid } );
+}
+
+=item sms_carriername
+
+=cut
+
+sub sms_carriername {
+  my $self = shift;
+  my $cdr_carrier = $self->sms_cdr_carrier or return '';
+  $cdr_carrier->carriername;
 }
 
 =item phone_device

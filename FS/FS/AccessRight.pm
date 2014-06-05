@@ -118,7 +118,6 @@ tie my %rights, 'Tie::IxHash',
     'Complimentary customer', #aka users-allow_comp 
     'Merge customer',
     'Merge customer across agents',
-    { rightname=>'Delete customer', desc=>"Enable customer deletions. Be very careful! Deleting a customer will remove all traces that this customer ever existed! It should probably only be used when auditing a legacy database. Normally, you cancel all of a customer's packages if they cancel service." }, #aka. deletecustomers
     'Bill customer now', #NEW
     'Bulk send customer notices', #NEW
     { rightname=>'View customers of all agents', global=>1 },
@@ -131,6 +130,7 @@ tie my %rights, 'Tie::IxHash',
     'View customer packages', #NEW
     'Order customer package',
     'One-time charge',
+    'Modify one-time charge',
     'Change customer package',
     'Detach customer package',
     'Bulk change customer packages',
@@ -160,6 +160,7 @@ tie my %rights, 'Tie::IxHash',
     'View customer services', #NEW
     'Provision customer service',
     'Bulk provision customer service',
+    'Bulk move customer services', #NEWNEW
     'Recharge customer service', #NEW
     'Unprovision customer service',
     'Change customer service', #NEWNEW
@@ -235,7 +236,7 @@ tie my %rights, 'Tie::IxHash',
   # customer voiding rights..
   ###
   'Customer payment void rights' => [
-    { rightname=>'Credit card void', desc=>'Enable local-only voiding of echeck payments in addition to refunds against the payment gateway.' }, #aka. cc-void 
+    { rightname=>'Credit card void', desc=>'Enable local-only voiding of credit card payments in addition to refunds against the payment gateway.' }, #aka. cc-void 
     { rightname=>'Echeck void', desc=>'Enable local-only voiding of echeck payments in addition to refunds against the payment gateway.' }, #aka. echeck-void
     'Void payments',
     { rightname=>'Unvoid payments', desc=>'Enable unvoiding of voided payments' }, #aka. unvoid 
@@ -293,6 +294,7 @@ tie my %rights, 'Tie::IxHash',
     'Services: Wireless broadband services',
     'Services: Wireless broadband services: Advanced search',
     'Services: DSLs',
+    'Services: Cable subscribers',
     'Services: Dish services',
     'Services: Hardware',
     'Services: Hardware: Advanced search',
@@ -301,6 +303,7 @@ tie my %rights, 'Tie::IxHash',
     'Services: PBXs',
     'Services: Ports',
     'Services: Mailing lists',
+    'Services: Alarm services',
     'Services: External services',
     'Usage: RADIUS sessions',
     'Usage: Call Detail Records (CDRs)',
@@ -342,6 +345,8 @@ tie my %rights, 'Tie::IxHash',
   'Configuration rights' => [
     'Edit advertising sources',
     { rightname=>'Edit global advertising sources', global=>1 },
+
+    'Edit sales people',
 
     'Edit package definitions',
     { rightname=>'Edit global package definitions', global=>1 },
@@ -403,7 +408,6 @@ Most (but not all) right names.
 sub default_superuser_rights {
   my $class = shift;
   my %omit = map { $_=>1 } (
-    'Delete customer',
     'Delete invoices',
     'Delete payment',
     'Delete credit', #?

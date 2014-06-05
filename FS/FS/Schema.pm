@@ -3,10 +3,12 @@ package FS::Schema;
 use vars qw(@ISA @EXPORT_OK $DEBUG $setup_hack %dbdef_cache);
 use subs qw(reload_dbdef);
 use Exporter;
-use DBIx::DBSchema 0.40; #0.40 for mysql upgrade fixes
+use DBIx::DBSchema 0.44; #for foreign keys with MATCH / ON DELETE/UPDATE
 use DBIx::DBSchema::Table;
 use DBIx::DBSchema::Column;
 use DBIx::DBSchema::Index;
+use DBIx::DBSchema::ForeignKey;
+#can't use this yet, dependency bs #use FS::Conf;
 
 @ISA = qw(Exporter);
 @EXPORT_OK = qw( dbdef dbdef_dist reload_dbdef );
@@ -75,7 +77,8 @@ Currently, this enables "ENGINE=InnoDB" for MySQL databases.
 =cut
 
 sub dbdef_dist {
-  my $datasrc = @_ ? shift : '';
+  my $datasrc = @_ && !ref($_[0]) ? shift : '';
+  my $opt = @_ ? shift : {};
   
   my $local_options = '';
   if ( $datasrc =~ /^dbi:mysql/i ) {
@@ -147,12 +150,17 @@ sub dbdef_dist {
                        }
                        @index;
 
+    my @foreign_keys =
+      map DBIx::DBSchema::ForeignKey->new($_),
+        @{ $tables_hashref->{$tablename}{'foreign_keys'} || [] };
+
     DBIx::DBSchema::Table->new({
-      'name'          => $tablename,
-      'primary_key'   => $tables_hashref->{$tablename}{'primary_key'},
-      'columns'       => \@columns,
-      'indices'       => \@indices,
-      'local_options' => $local_options,
+      name          => $tablename,
+      primary_key   => $tables_hashref->{$tablename}{'primary_key'},
+      columns       => \@columns,
+      indices       => \@indices,
+      foreign_keys  => \@foreign_keys,
+      local_options => $local_options,
     });
 
   } keys %$tables_hashref;
@@ -192,6 +200,7 @@ sub dbdef_dist {
     grep {    ! /^(clientapi|access_user)_session/
            && ! /^h_/
            && ! /^log(_context)?$/
+           && ( ! /^queue(_arg)?$/ || ! $opt->{'queue-no_history'} )
            && ! $tables_hashref_torrus->{$_}
          }
       $dbdef->tables
@@ -201,7 +210,7 @@ sub dbdef_dist {
 
     my %h_indices = ();
 
-    unless ( $table eq 'cust_event' ) { #others?
+    unless ( $table eq 'cust_event' || $table eq 'cdr' ) { #others?
 
       my %indices = $tableobj->indices;
     
@@ -236,6 +245,16 @@ sub dbdef_dist {
 
     }
 
+    my $primary_key_col = $tableobj->column($tableobj->primary_key)
+      or die "$table: primary key declared as ". $tableobj->primary_key.
+             ", but no column of that name\n";
+
+    my $historynum_type = ( $tableobj->column($tableobj->primary_key)->type
+                              =~ /^(bigserial|bigint|int8)$/i
+                                ? 'bigserial'
+                                : 'serial'
+                          );
+
     my $h_tableobj = DBIx::DBSchema::Table->new( {
       'name'          => "h_$table",
       'primary_key'   => 'historynum',
@@ -244,7 +263,7 @@ sub dbdef_dist {
       'columns'       => [
           DBIx::DBSchema::Column->new( {
             'name'    => 'historynum',
-            'type'    => 'serial',
+            'type'    => $historynum_type,
             'null'    => 'NOT NULL',
             'length'  => '',
             'default' => '',
@@ -261,8 +280,16 @@ sub dbdef_dist {
           DBIx::DBSchema::Column->new( {
             'name'    => 'history_user',
             'type'    => 'varchar',
-            'null'    => 'NOT NULL',
+            'null'    => 'NULL',
             'length'  => '80',
+            'default' => '',
+            'local'   => '',
+          } ),
+          DBIx::DBSchema::Column->new( {
+            'name'    => 'history_usernum',
+            'type'    => 'int',
+            'null'    => 'NULL',
+            'length'  => '',
             'default' => '',
             'local'   => '',
           } ),
@@ -466,12 +493,28 @@ sub tables_hashref {
         'freq',              'int', 'NULL', '', '', '', #deprecated (never used)
         'prog',                     @perl_type, '', '', #deprecated (never used)
       ],
-      'primary_key' => 'agentnum',
+      'primary_key'  => 'agentnum',
       #'unique' => [ [ 'agent_custnum' ] ], #one agent per customer?
                                             #insert is giving it a value, tho..
       #'index' => [ ['typenum'], ['disabled'] ],
-      'unique' => [],
-      'index' => [ ['typenum'], ['disabled'], ['agent_custnum'] ],
+      'unique'       => [],
+      'index'        => [ ['typenum'], ['disabled'], ['agent_custnum'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'typenum' ],
+                            table      => 'agent_type',
+                          },
+                          # 1. RT tables aren't part of our data structure, so
+                          #     we can't make sure Queue is created already
+                          # 2. Future ability to plug in other ticketing systems
+                          #{ columns    => [ 'ticketing_queueid' ],
+                          #  table      => 'Queue',
+                          #  references => [ 'id' ],
+                          #},
+                          { columns    => [ 'agent_custnum' ],
+                            table      => 'cust_main',
+                            references => [ 'custnum' ],
+                          },
+                        ],
     },
 
     'agent_pkg_class' => {
@@ -481,9 +524,17 @@ sub tables_hashref {
         'classnum',               'int', 'NULL',    '', '', '',
         'commission_percent', 'decimal',     '', '7,4', '', '',
       ],
-      'primary_key' => 'agentpkgclassnum',
-      'unique'      => [ [ 'agentnum', 'classnum' ], ],
-      'index'       => [],
+      'primary_key'  => 'agentpkgclassnum',
+      'unique'       => [ [ 'agentnum', 'classnum' ], ],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                          { columns    => [ 'classnum' ],
+                            table      => 'pkg_class',
+                          },
+                        ],
     },
 
     'agent_type' => {
@@ -502,9 +553,33 @@ sub tables_hashref {
         'typenum',   'int',  '', '', '', '', 
         'pkgpart',   'int',  '', '', '', '', 
       ],
-      'primary_key' => 'typepkgnum',
-      'unique' => [ ['typenum', 'pkgpart'] ],
-      'index' => [ ['typenum'] ],
+      'primary_key'  => 'typepkgnum',
+      'unique'       => [ ['typenum', 'pkgpart'] ],
+      'index'        => [ ['typenum'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'typenum' ],
+                            table      => 'agent_type',
+                          },
+                          { columns    => [ 'pkgpart' ],
+                            table      => 'part_pkg',
+                          },
+                        ],
+    },
+
+    'agent_currency' => {
+      'columns' => [
+        'agentcurrencynum', 'serial', '', '', '', '',
+        'agentnum',            'int', '', '', '', '',
+        'currency',           'char', '',  3, '', '',
+      ],
+      'primary_key'  => 'agentcurrencynum',
+      'unique'       => [],
+      'index'        => [ ['agentnum'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                        ],
     },
 
     'sales' => {
@@ -512,11 +587,42 @@ sub tables_hashref {
         'salesnum',          'serial',    '',       '', '', '', 
         'salesperson',      'varchar',    '',  $char_d, '', '', 
         'agentnum',             'int', 'NULL',      '', '', '', 
+        'sales_custnum',        'int', 'NULL',      '', '', '',
         'disabled',            'char', 'NULL',       1, '', '', 
       ],
-      'primary_key' => 'salesnum',
-      'unique' => [],
-      'index' => [ ['salesnum'], ['disabled'] ],
+      'primary_key'  => 'salesnum',
+      'unique'       => [],
+      'index'        => [ ['salesnum'], ['disabled'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                          { columns    => [ 'sales_custnum' ],
+                            table      => 'cust_main',
+                            references => [ 'custnum' ],
+                          },
+                        ],
+    },
+
+    'sales_pkg_class' => {
+      'columns' => [
+        'salespkgclassnum',    'serial',     '',    '', '', '',
+        'salesnum',               'int',     '',    '', '', '',
+        'classnum',               'int', 'NULL',    '', '', '',
+        'commission_percent', 'decimal',     '', '7,4', '', '',
+        'commission_duration',    'int', 'NULL',    '', '', '',
+      ],
+      'primary_key'  => 'salespkgclassnum',
+      'unique'       => [ [ 'salesnum', 'classnum' ], ],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'salesnum' ],
+                            table      => 'sales',
+                          },
+                          { columns    => [ 'classnum' ],
+                            table      => 'pkg_class',
+                          },
+                        ],
     },
 
     'cust_attachment' => {
@@ -532,18 +638,27 @@ sub tables_hashref {
         'body',      'blob', 'NULL', '', '', '',
         'disabled',  @date_type, '', '',
       ],
-      'primary_key' => 'attachnum',
-      'unique'      => [],
-      'index'       => [ ['custnum'], ['usernum'], ],
-    },
+      'primary_key'  => 'attachnum',
+      'unique'       => [],
+      'index'        => [ ['custnum'], ['usernum'], ],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                          { columns    => [ 'usernum' ],
+                            table      => 'access_user',
+                          },
+                        ],
+   },
 
     'cust_bill' => {
       'columns' => [
         #regular fields
-        'invnum',    'serial',     '', '', '', '', 
-        'custnum',      'int',     '', '', '', '', 
-        '_date',        @date_type,        '', '', 
-        'charged',      @money_type,       '', '', 
+        'invnum',         'serial',     '',      '', '', '', 
+        'custnum',           'int',     '',      '', '', '', 
+        '_date',        @date_type,                  '', '', 
+        'charged',     @money_type,                  '', '', 
+        'currency',         'char', 'NULL',       3, '', '',
         'invoice_terms', 'varchar', 'NULL', $char_d, '', '',
 
         #customer balance info at invoice generation time
@@ -559,18 +674,29 @@ sub tables_hashref {
         'agent_invid',  'int', 'NULL', '', '', '', #(varchar?) importing legacy
         'promised_date', @date_type,       '', '',
       ],
-      'primary_key' => 'invnum',
-      'unique' => [ [ 'custnum', 'agent_invid' ] ], #agentnum?  huh
-      'index' => [ ['custnum'], ['_date'], ['statementnum'], ['agent_invid'] ],
+      'primary_key'  => 'invnum',
+      'unique'       => [ [ 'custnum', 'agent_invid' ] ], #agentnum?  huh
+      'index'        => [ ['custnum'], ['_date'], ['statementnum'],
+                          ['agent_invid'],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                          { columns    => [ 'statementnum' ],
+                            table      => 'cust_statement',
+                          },
+                        ],
     },
 
     'cust_bill_void' => {
       'columns' => [
         #regular fields
-        'invnum',       'int',     '', '', '', '', 
-        'custnum',      'int',     '', '', '', '', 
-        '_date',        @date_type,        '', '', 
-        'charged',      @money_type,       '', '', 
+        'invnum',            'int',     '',      '', '', '', 
+        'custnum',           'int',     '',      '', '', '', 
+        '_date',        @date_type,                  '', '', 
+        'charged',     @money_type,                  '', '', 
+        'currency',         'char', 'NULL',       3, '', '',
         'invoice_terms', 'varchar', 'NULL', $char_d, '', '',
 
         #customer balance info at invoice generation time
@@ -588,9 +714,23 @@ sub tables_hashref {
         'reason',    'varchar',   'NULL', $char_d, '', '', 
         'void_usernum',   'int', 'NULL', '', '', '',
       ],
-      'primary_key' => 'invnum',
-      'unique' => [ [ 'custnum', 'agent_invid' ] ], #agentnum?  huh
-      'index' => [ ['custnum'], ['_date'], ['statementnum'], ['agent_invid'], [ 'void_usernum' ] ],
+      'primary_key'  => 'invnum',
+      'unique'       => [ [ 'custnum', 'agent_invid' ] ], #agentnum?  huh
+      'index'        => [ ['custnum'], ['_date'], ['statementnum'],
+                          ['agent_invid'], [ 'void_usernum' ],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                          { columns    => [ 'statementnum' ],
+                            table      => 'cust_statement', #_void? both?
+                          },
+                          { columns    => [ 'void_usernum' ],
+                            table      => 'access_user',
+                            references => [ 'usernum' ],
+                          },
+                        ],
     },
 
     #for importing invoices from a legacy system for display purposes only
@@ -602,13 +742,19 @@ sub tables_hashref {
         'custnum',          'int',     '',      '', '', '', 
         '_date',       @date_type,                  '', '', 
         'charged',    @money_type,                  '', '', 
+        'currency',        'char', 'NULL',       3, '', '',
         'content_pdf',     'blob', 'NULL',      '', '', '',
         'content_html',    'text', 'NULL',      '', '', '',
         'locale',       'varchar', 'NULL',      16, '', '', 
       ],
-      'primary_key' => 'legacyinvnum',
-      'unique' => [],
-      'index'  => [ ['legacyid', 'custnum', 'locale' ], ],
+      'primary_key'  => 'legacyinvnum',
+      'unique'       => [],
+      'index'        => [ ['legacyid', 'custnum', 'locale' ], ],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                        ],
     },
 
     'cust_statement' => {
@@ -617,11 +763,17 @@ sub tables_hashref {
         'custnum',         'int', '', '', '', '',
         '_date',           @date_type,    '', '',
       ],
-      'primary_key' => 'statementnum',
-      'unique' => [],
-      'index' => [ ['custnum'], ['_date'], ],
+      'primary_key'  => 'statementnum',
+      'unique'       => [],
+      'index'        => [ ['custnum'], ['_date'], ],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                        ],
     },
 
+    #old "invoice" events, deprecated
     'cust_bill_event' => {
       'columns' => [
         'eventnum',    'serial',  '', '', '', '', 
@@ -631,14 +783,23 @@ sub tables_hashref {
         'status', 'varchar', '', $char_d, '', '', 
         'statustext', 'text', 'NULL', '', '', '', 
       ],
-      'primary_key' => 'eventnum',
+      'primary_key'  => 'eventnum',
       #no... there are retries now #'unique' => [ [ 'eventpart', 'invnum' ] ],
-      'unique' => [],
-      'index' => [ ['invnum'], ['status'], ['eventpart'],
-                   ['statustext'], ['_date'],
-                 ],
+      'unique'       => [],
+      'index'        => [ ['invnum'], ['status'], ['eventpart'],
+                          ['statustext'], ['_date'],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'invnum' ],
+                            table      => 'cust_bill',
+                          },
+                          { columns    => [ 'eventpart' ],
+                            table      => 'part_bill_event',
+                          },
+                        ],
     },
 
+    #old "invoice" events, deprecated
     'part_bill_event' => {
       'columns' => [
         'eventpart',    'serial',  '', '', '', '', 
@@ -653,9 +814,15 @@ sub tables_hashref {
         'reason',     'int', 'NULL', '', '', '', 
         'disabled',     'char', 'NULL', 1, '', '', 
       ],
-      'primary_key' => 'eventpart',
-      'unique' => [],
-      'index' => [ ['payby'], ['disabled'], ],
+      'primary_key'  => 'eventpart',
+      'unique'       => [],
+      'index'        => [ ['payby'], ['disabled'], ],
+      'foreign_keys' => [
+                          { columns    => [ 'reason' ],
+                            table      => 'reason',
+                            references => [ 'reasonnum' ],
+                          },
+                        ],
     },
 
     'part_event' => {
@@ -669,9 +836,16 @@ sub tables_hashref {
         'action',      'varchar',     '', $char_d, '', '',
         'disabled',     'char',   'NULL',       1, '', '', 
       ],
-      'primary_key' => 'eventpart',
-      'unique' => [],
-      'index' => [ ['agentnum'], ['eventtable'], ['check_freq'], ['disabled'], ],
+      'primary_key'  => 'eventpart',
+      'unique'       => [],
+      'index'        => [ ['agentnum'], ['eventtable'], ['check_freq'],
+                          ['disabled'],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                        ],
     },
 
     'part_event_option' => {
@@ -681,9 +855,14 @@ sub tables_hashref {
         'optionname', 'varchar', '', $char_d, '', '', 
         'optionvalue', 'text', 'NULL', '', '', '', 
       ],
-      'primary_key' => 'optionnum',
-      'unique'      => [],
-      'index'       => [ [ 'eventpart' ], [ 'optionname' ] ],
+      'primary_key'  => 'optionnum',
+      'unique'       => [],
+      'index'        => [ [ 'eventpart' ], [ 'optionname' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'eventpart' ],
+                            table      => 'part_event',
+                          },
+                        ],
     },
 
     'part_event_condition' => {
@@ -692,9 +871,14 @@ sub tables_hashref {
         'eventpart', 'int', '', '', '', '', 
         'conditionname', 'varchar', '', $char_d, '', '', 
       ],
-      'primary_key' => 'eventconditionnum',
-      'unique'      => [],
-      'index'       => [ [ 'eventpart' ], [ 'conditionname' ] ],
+      'primary_key'  => 'eventconditionnum',
+      'unique'       => [],
+      'index'        => [ [ 'eventpart' ], [ 'conditionname' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'eventpart' ],
+                            table      => 'part_event',
+                          },
+                        ],
     },
 
     'part_event_condition_option' => {
@@ -704,9 +888,14 @@ sub tables_hashref {
         'optionname', 'varchar', '', $char_d, '', '', 
         'optionvalue', 'text', 'NULL', '', '', '', 
       ],
-      'primary_key' => 'optionnum',
-      'unique'      => [],
-      'index'       => [ [ 'eventconditionnum' ], [ 'optionname' ] ],
+      'primary_key'  => 'optionnum',
+      'unique'       => [],
+      'index'        => [ [ 'eventconditionnum' ], [ 'optionname' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'eventconditionnum' ],
+                            table      => 'part_event_condition',
+                          },
+                        ],
     },
 
     'part_event_condition_option_option' => {
@@ -716,9 +905,14 @@ sub tables_hashref {
         'optionname', 'varchar', '', $char_d, '', '', 
         'optionvalue', 'text', 'NULL', '', '', '', 
       ],
-      'primary_key' => 'optionoptionnum',
-      'unique'      => [],
-      'index'       => [ [ 'optionnum' ], [ 'optionname' ] ],
+      'primary_key'  => 'optionoptionnum',
+      'unique'       => [],
+      'index'        => [ [ 'optionnum' ], [ 'optionname' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'optionnum' ],
+                            table      => 'part_event_condition_option',
+                          },
+                        ],
     },
 
     'cust_event' => {
@@ -730,36 +924,58 @@ sub tables_hashref {
         'status', 'varchar', '', $char_d, '', '', 
         'statustext', 'text', 'NULL', '', '', '', 
       ],
-      'primary_key' => 'eventnum',
+      'primary_key'  => 'eventnum',
       #no... there are retries now #'unique' => [ [ 'eventpart', 'invnum' ] ],
-      'unique' => [],
-      'index' => [ ['eventpart'], ['tablenum'], ['status'],
-                   ['statustext'], ['_date'],
-                 ],
+      'unique'       => [],
+      'index'        => [ ['eventpart'], ['tablenum'], ['status'],
+                          ['statustext'], ['_date'],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'eventpart' ],
+                            table      => 'part_event',
+                          },
+                        ],
     },
 
     'cust_bill_pkg' => {
       'columns' => [
-        'billpkgnum',        'serial',     '',      '', '', '', 
-        'invnum',               'int',     '',      '', '', '', 
-        'pkgnum',               'int',     '',      '', '', '', 
-        'pkgpart_override',     'int', 'NULL',      '', '', '', 
-        'setup',               @money_type,             '', '', 
-        'recur',               @money_type,             '', '', 
-        'sdate',               @date_type,              '', '', 
-        'edate',               @date_type,              '', '', 
-        'itemdesc',         'varchar', 'NULL', $char_d, '', '', 
-        'itemcomment',      'varchar', 'NULL', $char_d, '', '', 
-        'section',          'varchar', 'NULL', $char_d, '', '', 
-        'freq',             'varchar', 'NULL', $char_d, '', '',
-        'quantity',             'int', 'NULL',      '', '', '',
-        'unitsetup',           @money_typen,            '', '', 
-        'unitrecur',           @money_typen,            '', '', 
-        'hidden',              'char', 'NULL',       1, '', '',
+        'billpkgnum',          'serial',     '',      '', '', '', 
+        'invnum',                 'int',     '',      '', '', '', 
+        'pkgnum',                 'int',     '',      '', '', '', 
+        'pkgpart_override',       'int', 'NULL',      '', '', '', 
+        'setup',                 @money_type,             '', '', 
+        'unitsetup',             @money_typen,            '', '', 
+        'setup_billed_currency', 'char', 'NULL',       3, '', '',
+        'setup_billed_amount',   @money_typen,            '', '',
+        'recur',                 @money_type,             '', '', 
+        'unitrecur',             @money_typen,            '', '', 
+        'recur_billed_currency', 'char', 'NULL',       3, '', '',
+        'recur_billed_amount',   @money_typen,            '', '',
+        'sdate',                 @date_type,              '', '', 
+        'edate',                 @date_type,              '', '', 
+        'itemdesc',           'varchar', 'NULL', $char_d, '', '', 
+        'itemcomment',        'varchar', 'NULL', $char_d, '', '', 
+        'section',            'varchar', 'NULL', $char_d, '', '', 
+        'freq',               'varchar', 'NULL', $char_d, '', '',
+        'quantity',               'int', 'NULL',      '', '', '',
+        'hidden',                'char', 'NULL',       1, '', '',
       ],
-      'primary_key' => 'billpkgnum',
-      'unique' => [],
-      'index' => [ ['invnum'], [ 'pkgnum' ], [ 'itemdesc' ], ],
+      'primary_key'  => 'billpkgnum',
+      'unique'       => [],
+      'index'        => [ ['invnum'], [ 'pkgnum' ], [ 'itemdesc' ], ],
+      'foreign_keys' => [
+                          { columns    => [ 'invnum' ],
+                            table      => 'cust_bill',
+                          },
+                          #pkgnum 0 and -1 are used for special things
+                          #{ columns    => [ 'pkgnum' ],
+                          #  table      => 'cust_pkg',
+                          #},
+                          { columns    => [ 'pkgpart_override' ],
+                            table      => 'part_pkg',
+                            references => [ 'pkgpart' ],
+                          },
+                        ],
     },
 
     'cust_bill_pkg_detail' => {
@@ -778,9 +994,25 @@ sub tables_hashref {
         'regionname', 'varchar', 'NULL', $char_d, '', '',
         'detail',  'varchar', '', 255, '', '', 
       ],
-      'primary_key' => 'detailnum',
-      'unique' => [],
-      'index' => [ [ 'billpkgnum' ], [ 'classnum' ], [ 'pkgnum', 'invnum' ] ],
+      'primary_key'  => 'detailnum',
+      'unique'       => [],
+      'index'        => [ [ 'billpkgnum' ], [ 'classnum' ],
+                          [ 'pkgnum', 'invnum' ],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'billpkgnum' ],
+                            table      => 'cust_bill_pkg',
+                          },
+                          { columns    => [ 'pkgnum' ],
+                            table      => 'cust_pkg',
+                          },
+                          { columns    => [ 'invnum' ],
+                            table      => 'cust_bill',
+                          },
+                          { columns    => [ 'classnum' ],
+                            table      => 'usage_class',
+                          },
+                        ],
     },
 
     'cust_bill_pkg_display' => {
@@ -794,47 +1026,82 @@ sub tables_hashref {
         'type',       'char', 'NULL', 1, '', '',
         'summary',    'char', 'NULL', 1, '', '',
       ],
-      'primary_key' => 'billpkgdisplaynum',
-      'unique' => [],
-      'index' => [ ['billpkgnum'], ],
+      'primary_key'  => 'billpkgdisplaynum',
+      'unique'       => [],
+      'index'        => [ ['billpkgnum'], ],
+      'foreign_keys' => [
+                          { columns    => [ 'billpkgnum' ],
+                            table      => 'cust_bill_pkg',
+                          },
+                        ],
     },
 
     'cust_bill_pkg_tax_location' => {
       'columns' => [
-        'billpkgtaxlocationnum', 'serial',      '', '', '', '',
-        'billpkgnum',               'int',      '', '', '', '',
-        'taxnum',                   'int',      '', '', '', '',
-        'taxtype',              'varchar',      '', $char_d, '', '',
-        'pkgnum',                   'int',      '', '', '', '', #redundant
-        'locationnum',              'int',      '', '', '', '', #redundant
-        'amount',                   @money_type,        '', '',
-        'taxable_billpkgnum',       'int',  'NULL', '', '', '',
+        'billpkgtaxlocationnum', 'serial',     '',      '', '', '',
+        'billpkgnum',               'int',     '',      '', '', '',
+        'taxnum',                   'int',     '',      '', '', '',
+        'taxtype',              'varchar',     '', $char_d, '', '',
+        'pkgnum',                   'int',     '',      '', '', '', #redundant
+        'locationnum',              'int',     '',      '', '', '', #redundant
+        'amount',             @money_type,                  '', '',
+        'currency',                'char', 'NULL',       3, '', '',
+        'taxable_billpkgnum',       'int', 'NULL',      '', '', '',
       ],
-      'primary_key' => 'billpkgtaxlocationnum',
-      'unique' => [],
-      'index'  => [ [ 'billpkgnum' ], 
-                    [ 'taxnum' ],
-                    [ 'pkgnum' ],
-                    [ 'locationnum' ],
-                    [ 'taxable_billpkgnum' ],
-                  ],
+      'primary_key'  => 'billpkgtaxlocationnum',
+      'unique'       => [],
+      'index'        => [ [ 'billpkgnum' ], 
+                          [ 'taxnum' ],
+                          [ 'pkgnum' ],
+                          [ 'locationnum' ],
+                          [ 'taxable_billpkgnum' ],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'billpkgnum' ],
+                            table      => 'cust_bill_pkg',
+                          },
+                          { columns    => [ 'pkgnum' ],
+                            table      => 'cust_pkg',
+                          },
+                          { columns    => [ 'locationnum' ],
+                            table      => 'cust_location',
+                          },
+                          { columns    => [ 'taxable_billpkgnum' ],
+                            table      => 'cust_bill_pkg',
+                            references => [ 'billpkgnum' ],
+                          },
+                        ],
     },
 
     'cust_bill_pkg_tax_rate_location' => {
       'columns' => [
-        'billpkgtaxratelocationnum', 'serial',      '', '', '', '',
-        'billpkgnum',                   'int',      '', '', '', '',
-        'taxnum',                       'int',      '', '', '', '',
+        'billpkgtaxratelocationnum', 'serial',      '',      '', '', '',
+        'billpkgnum',                   'int',      '',      '', '', '',
+        'taxnum',                       'int',      '',      '', '', '',
         'taxtype',                  'varchar',      '', $char_d, '', '',
         'locationtaxid',            'varchar',  'NULL', $char_d, '', '',
-        'taxratelocationnum',           'int',      '', '', '', '',
-        'amount',                       @money_type,        '', '',
-        'taxable_billpkgnum',       'int',  'NULL', '', '', '',
+        'taxratelocationnum',           'int',      '',      '', '', '',
+        'amount',                 @money_type,                   '', '',
+        'currency',                    'char', 'NULL',        3, '', '',
+        'taxable_billpkgnum',           'int', 'NULL',       '', '', '',
       ],
-      'primary_key' => 'billpkgtaxratelocationnum',
-      'unique' => [],
-      'index'  => [ [ 'billpkgnum' ], [ 'taxnum' ], [ 'taxratelocationnum' ],
-                    [ 'taxable_billpkgnum' ], ],
+      'primary_key'  => 'billpkgtaxratelocationnum',
+      'unique'       => [],
+      'index'        => [ ['billpkgnum'], ['taxnum'], ['taxratelocationnum'],
+                          ['taxable_billpkgnum'],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'billpkgnum' ],
+                            table      => 'cust_bill_pkg',
+                          },
+                          { columns    => [ 'taxratelocationnum' ],
+                            table      => 'tax_rate_location',
+                          },
+                          { columns    => [ 'taxable_billpkgnum' ],
+                            table      => 'cust_bill_pkg',
+                            references => [ 'billpkgnum' ],
+                          },
+                        ],
     },
 
     'cust_bill_pkg_void' => {
@@ -845,6 +1112,8 @@ sub tables_hashref {
         'pkgpart_override',     'int', 'NULL',      '', '', '', 
         'setup',               @money_type,             '', '', 
         'recur',               @money_type,             '', '', 
+        #XXX a currency for a line item?  or just one for the entire invoice
+        #'currency',            'char', 'NULL',       3, '', '',
         'sdate',               @date_type,              '', '', 
         'edate',               @date_type,              '', '', 
         'itemdesc',         'varchar', 'NULL', $char_d, '', '', 
@@ -860,9 +1129,28 @@ sub tables_hashref {
         'reason',    'varchar',   'NULL', $char_d, '', '', 
         'void_usernum',   'int', 'NULL', '', '', '',
       ],
-      'primary_key' => 'billpkgnum',
-      'unique' => [],
-      'index' => [ ['invnum'], [ 'pkgnum' ], [ 'itemdesc' ], [ 'void_usernum' ], ],
+      'primary_key'  => 'billpkgnum',
+      'unique'       => [],
+      'index'        => [ ['invnum'], ['pkgnum'], ['itemdesc'],
+                          ['void_usernum'],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'invnum' ],
+                            table      => 'cust_bill_void',
+                          },
+                          #pkgnum 0 and -1 are used for special things
+                          #{ columns    => [ 'pkgnum' ],
+                          #  table      => 'cust_pkg',
+                          #},
+                          { columns    => [ 'pkgpart_override' ],
+                            table      => 'part_pkg',
+                            references => [ 'pkgpart' ],
+                          },
+                          { columns    => [ 'void_usernum' ],
+                            table      => 'access_user',
+                            references => [ 'usernum' ],
+                          },
+                        ],
     },
 
     'cust_bill_pkg_detail_void' => {
@@ -881,9 +1169,23 @@ sub tables_hashref {
         'regionname', 'varchar', 'NULL', $char_d, '', '',
         'detail',  'varchar', '', 255, '', '', 
       ],
-      'primary_key' => 'detailnum',
-      'unique' => [],
-      'index' => [ [ 'billpkgnum' ], [ 'classnum' ], [ 'pkgnum', 'invnum' ] ],
+      'primary_key'  => 'detailnum',
+      'unique'       => [],
+      'index'        => [ ['billpkgnum'], ['classnum'], ['pkgnum', 'invnum'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'billpkgnum' ],
+                            table      => 'cust_bill_pkg_void',
+                          },
+                          { columns    => [ 'pkgnum' ],
+                            table      => 'cust_pkg',
+                          },
+                          { columns    => [ 'invnum' ],
+                            table      => 'cust_bill',
+                          },
+                          { columns    => [ 'classnum' ],
+                            table      => 'usage_class',
+                          },
+                        ],
     },
 
     'cust_bill_pkg_display_void' => {
@@ -897,61 +1199,192 @@ sub tables_hashref {
         'type',       'char', 'NULL', 1, '', '',
         'summary',    'char', 'NULL', 1, '', '',
       ],
-      'primary_key' => 'billpkgdisplaynum',
-      'unique' => [],
-      'index' => [ ['billpkgnum'], ],
+      'primary_key'  => 'billpkgdisplaynum',
+      'unique'       => [],
+      'index'        => [ ['billpkgnum'], ],
+      'foreign_keys' => [
+                          { columns    => [ 'billpkgnum' ],
+                            table      => 'cust_bill_pkg_void',
+                          },
+                        ],
     },
 
     'cust_bill_pkg_tax_location_void' => {
       'columns' => [
-        'billpkgtaxlocationnum',    'int',      '', '', '', '',
-        'billpkgnum',               'int',      '', '', '', '',
-        'taxnum',                   'int',      '', '', '', '',
-        'taxtype',              'varchar',      '', $char_d, '', '',
-        'pkgnum',                   'int',      '', '', '', '',
-        'locationnum',              'int',      '', '', '', '', #redundant?
-        'amount',                   @money_type,        '', '',
+        'billpkgtaxlocationnum',    'int',     '',      '', '', '',
+        'billpkgnum',               'int',     '',      '', '', '',
+        'taxnum',                   'int',     '',      '', '', '',
+        'taxtype',              'varchar',     '', $char_d, '', '',
+        'pkgnum',                   'int',     '',      '', '', '',
+        'locationnum',              'int',     '',      '', '', '', #redundant?
+        'amount',             @money_type,                  '', '',
+        'currency',                'char', 'NULL',       3, '', '',
+        'taxable_billpkgnum',       'int', 'NULL',      '', '', '',
       ],
-      'primary_key' => 'billpkgtaxlocationnum',
-      'unique' => [],
-      'index'  => [ [ 'billpkgnum' ], [ 'taxnum' ], [ 'pkgnum' ], [ 'locationnum' ] ],
+      'primary_key'  => 'billpkgtaxlocationnum',
+      'unique'       => [],
+      'index'        => [ ['billpkgnum'], ['taxnum'], ['pkgnum'],
+                          ['locationnum'],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'billpkgnum' ],
+                            table      => 'cust_bill_pkg_void',
+                          },
+                          { columns    => [ 'pkgnum' ],
+                            table      => 'cust_pkg',
+                          },
+                          { columns    => [ 'locationnum' ],
+                            table      => 'cust_location',
+                          },
+                          { columns    => [ 'taxable_billpkgnum' ],
+                            table      => 'cust_bill_pkg_void',
+                            references => [ 'billpkgnum' ],
+                          },
+                        ],
     },
 
     'cust_bill_pkg_tax_rate_location_void' => {
       'columns' => [
-        'billpkgtaxratelocationnum',    'int',      '', '', '', '',
-        'billpkgnum',                   'int',      '', '', '', '',
-        'taxnum',                       'int',      '', '', '', '',
-        'taxtype',                  'varchar',      '', $char_d, '', '',
-        'locationtaxid',            'varchar',  'NULL', $char_d, '', '',
-        'taxratelocationnum',           'int',      '', '', '', '',
-        'amount',                       @money_type,        '', '',
+        'billpkgtaxratelocationnum',    'int',     '',      '', '', '',
+        'billpkgnum',                   'int',     '',      '', '', '',
+        'taxnum',                       'int',     '',      '', '', '',
+        'taxtype',                  'varchar',     '', $char_d, '', '',
+        'locationtaxid',            'varchar', 'NULL', $char_d, '', '',
+        'taxratelocationnum',           'int',     '',      '', '', '',
+        'amount',                 @money_type,                  '', '',
+        'currency',                    'char', 'NULL',       3, '', '',
       ],
-      'primary_key' => 'billpkgtaxratelocationnum',
-      'unique' => [],
-      'index'  => [ [ 'billpkgnum' ], [ 'taxnum' ], [ 'taxratelocationnum' ] ],
+      'primary_key'  => 'billpkgtaxratelocationnum',
+      'unique'       => [],
+      'index'        => [ ['billpkgnum'], ['taxnum'], ['taxratelocationnum'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'billpkgnum' ],
+                            table      => 'cust_bill_pkg_void',
+                          },
+                          { columns    => [ 'taxratelocationnum' ],
+                            table      => 'tax_rate_location',
+                          },
+                        ],
     },
 
     'cust_credit' => {
       'columns' => [
-        'crednum',  'serial', '', '', '', '', 
-        'custnum',  'int', '', '', '', '', 
-        '_date',    @date_type, '', '', 
-        'amount',   @money_type, '', '', 
-        'otaker',   'varchar', 'NULL', 32, '', '', 
-        'usernum',   'int', 'NULL', '', '', '',
-        'reason',   'text', 'NULL', '', '', '', 
-        'reasonnum', 'int', 'NULL', '', '', '', 
-        'addlinfo', 'text', 'NULL', '', '', '',
-        'closed',    'char', 'NULL', 1, '', '', 
-        'pkgnum', 'int', 'NULL', '', '', '', #desired pkgnum for pkg-balances
-        'eventnum', 'int', 'NULL', '', '', '', #triggering event for commission
-        #'commission_agentnum', 'int', 'NULL', '', '', '', #
+        'crednum',  'serial',     '', '', '', '', 
+        'custnum',     'int',     '', '', '', '', 
+        '_date',  @date_type,             '', '', 
+        'amount',@money_type,             '', '', 
+        'currency',   'char', 'NULL',  3, '', '',
+        'otaker',  'varchar', 'NULL', 32, '', '', 
+        'usernum',     'int', 'NULL', '', '', '',
+        'reason',     'text', 'NULL', '', '', '', 
+        'reasonnum',   'int', 'NULL', '', '', '', 
+        'addlinfo',   'text', 'NULL', '', '', '',
+        'closed',     'char', 'NULL',  1, '', '', 
+        'pkgnum',      'int', 'NULL', '', '','',#desired pkgnum for pkg-balances
+        'eventnum',    'int', 'NULL', '', '','',#triggering event for commission
+        'commission_agentnum', 'int', 'NULL', '', '', '', #
+        'commission_salesnum', 'int', 'NULL', '', '', '', #
+        'commission_pkgnum',   'int', 'NULL', '', '', '', #
       ],
-      'primary_key' => 'crednum',
-      'unique' => [],
-      'index' => [ ['custnum'], ['_date'], ['usernum'], ['eventnum'] ],
+      'primary_key'  => 'crednum',
+      'unique'       => [],
+      'index'        => [ ['custnum'], ['_date'], ['usernum'], ['eventnum'],
+                          ['commission_salesnum'],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                          { columns    => [ 'usernum' ],
+                            table      => 'access_user',
+                          },
+                          { columns    => [ 'reasonnum' ],
+                            table      => 'reason',
+                          },
+                          { columns    => [ 'pkgnum' ],
+                            table      => 'cust_pkg',
+                          },
+                          { columns    => [ 'eventnum' ],
+                            table      => 'cust_event',
+                          },
+                          { columns    => [ 'commission_agentnum' ],
+                            table      => 'agent',
+                            references => [ 'agentnum' ],
+                          },
+                          { columns    => [ 'commission_salesnum' ],
+                            table      => 'sales',
+                            references => [ 'salesnum' ],
+                          },
+                          { columns    => [ 'commission_pkgnum' ],
+                            table      => 'cust_pkg',
+                            references => [ 'pkgnum' ],
+                          },
+                        ],
     },
+
+    'cust_credit_void' => {
+      'columns' => [
+        'crednum',  'serial',     '', '', '', '', 
+        'custnum',     'int',     '', '', '', '', 
+        '_date',  @date_type,             '', '', 
+        'amount',@money_type,             '', '', 
+        'currency',   'char', 'NULL',  3, '', '',
+        'otaker',  'varchar', 'NULL', 32, '', '', 
+        'usernum',     'int', 'NULL', '', '', '',
+        'reason',     'text', 'NULL', '', '', '', 
+        'reasonnum',   'int', 'NULL', '', '', '', 
+        'addlinfo',   'text', 'NULL', '', '', '',
+        'closed',     'char', 'NULL',  1, '', '', 
+        'pkgnum',      'int', 'NULL', '', '','',
+        'eventnum',    'int', 'NULL', '', '','',
+        'commission_agentnum', 'int', 'NULL', '', '', '',
+        'commission_salesnum', 'int', 'NULL', '', '', '',
+        'commission_pkgnum',   'int', 'NULL', '', '', '',
+        #void fields
+        'void_date',  @date_type,                  '', '', 
+        'void_reason', 'varchar', 'NULL', $char_d, '', '', 
+        'void_usernum',    'int', 'NULL',      '', '', '',
+      ],
+      'primary_key'  => 'crednum',
+      'unique'       => [],
+      'index'        => [ ['custnum'], ['_date'], ['usernum'], ['eventnum'],
+                          ['commission_salesnum'],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                          { columns    => [ 'usernum' ],
+                            table      => 'access_user',
+                          },
+                          { columns    => [ 'reasonnum' ],
+                            table      => 'reason',
+                          },
+                          { columns    => [ 'pkgnum' ],
+                            table      => 'cust_pkg',
+                          },
+                          { columns    => [ 'eventnum' ],
+                            table      => 'cust_event',
+                          },
+                          { columns    => [ 'commission_agentnum' ],
+                            table      => 'agent',
+                            references => [ 'agentnum' ],
+                          },
+                          { columns    => [ 'commission_salesnum' ],
+                            table      => 'sales',
+                            references => [ 'salesnum' ],
+                          },
+                          { columns    => [ 'commission_pkgnum' ],
+                            table      => 'cust_pkg',
+                            references => [ 'pkgnum' ],
+                          },
+                          { columns    => [ 'void_usernum' ],
+                            table      => 'access_user',
+                            references => [ 'usernum' ],
+                          },
+                        ],
+    },
+
 
     'cust_credit_bill' => {
       'columns' => [
@@ -962,9 +1395,20 @@ sub tables_hashref {
         'amount',   @money_type, '', '', 
         'pkgnum', 'int', 'NULL', '', '', '', #desired pkgnum for pkg-balances
       ],
-      'primary_key' => 'creditbillnum',
-      'unique' => [],
-      'index' => [ ['crednum'], ['invnum'] ],
+      'primary_key'  => 'creditbillnum',
+      'unique'       => [],
+      'index'        => [ ['crednum'], ['invnum'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'crednum' ],
+                            table      => 'cust_credit',
+                          },
+                          { columns    => [ 'invnum' ],
+                            table      => 'cust_bill',
+                          },
+                          { columns    => [ 'pkgnum' ],
+                            table      => 'cust_pkg',
+                          },
+                        ],
     },
 
     'cust_credit_bill_pkg' => {
@@ -979,19 +1423,34 @@ sub tables_hashref {
         'sdate',   @date_type, '', '', 
         'edate',   @date_type, '', '', 
       ],
-      'primary_key' => 'creditbillpkgnum',
-      'unique'      => [],
-      'index'       => [ [ 'creditbillnum' ],
-                         [ 'billpkgnum' ], 
-                         [ 'billpkgtaxlocationnum' ],
-                         [ 'billpkgtaxratelocationnum' ],
-                       ],
+      'primary_key'  => 'creditbillpkgnum',
+      'unique'       => [],
+      'index'        => [ [ 'creditbillnum' ],
+                          [ 'billpkgnum' ], 
+                          [ 'billpkgtaxlocationnum' ],
+                          [ 'billpkgtaxratelocationnum' ],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'creditbillnum' ],
+                            table      => 'cust_credit_bill',
+                          },
+                          { columns    => [ 'billpkgnum' ],
+                            table      => 'cust_bill_pkg',
+                          },
+                          { columns    => [ 'billpkgtaxlocationnum' ],
+                            table      => 'cust_bill_pkg_tax_location',
+                          },
+                          { columns    => [ 'billpkgtaxratelocationnum' ],
+                            table      => 'cust_bill_pkg_tax_rate_location',
+                          },
+                        ],
     },
 
     'cust_main' => {
       'columns' => [
         'custnum',  'serial',  '',     '', '', '', 
         'agentnum', 'int',  '',     '', '', '', 
+        'salesnum', 'int',  'NULL', '', '', '', 
         'agent_custid', 'varchar', 'NULL', $char_d, '', '',
         'classnum', 'int', 'NULL', '', '', '',
         'custbatch', 'varchar', 'NULL', $char_d, '', '',
@@ -1043,7 +1502,10 @@ sub tables_hashref {
         'ship_night',    'varchar', 'NULL', 20, '', '', 
         'ship_fax',      'varchar', 'NULL', 12, '', '', 
         'ship_mobile',   'varchar', 'NULL', 12, '', '', 
-        'payby',    'char', '',     4, '', '', 
+        'currency',         'char', 'NULL',  3, '', '',
+
+        #deprecated, info moved to cust_payby
+        'payby',    'char', 'NULL',     4, '', '', 
         'payinfo',  'varchar', 'NULL', 512, '', '', 
         'paycvv',   'varchar', 'NULL', 512, '', '', 
         'paymask', 'varchar', 'NULL', $char_d, '', '', 
@@ -1056,6 +1518,7 @@ sub tables_hashref {
         'paystate', 'varchar', 'NULL', $char_d, '', '', 
         'paytype',  'varchar', 'NULL', $char_d, '', '', 
         'payip',    'varchar', 'NULL', 15, '', '', 
+
         'geocode',  'varchar', 'NULL', 20,  '', '',
         'censustract', 'varchar', 'NULL', 20,  '', '', # 7 to save space?
         'censusyear', 'char', 'NULL', 4, '', '',
@@ -1071,6 +1534,7 @@ sub tables_hashref {
         'cdr_termination_percentage', 'decimal', 'NULL', '7,4', '', '',
         'invoice_terms', 'varchar', 'NULL', $char_d, '', '',
         'credit_limit', @money_typen, '', '',
+        'credit_limit_currency', 'char', 'NULL',  3, '', '',
         'archived', 'char', 'NULL', 1, '', '',
         'email_csv_cdr', 'char', 'NULL', 1, '', '',
         'accountcode_cdr', 'char', 'NULL', 1, '', '',
@@ -1084,16 +1548,78 @@ sub tables_hashref {
         'bill_locationnum', 'int', 'NULL', '', '', '',
         'ship_locationnum', 'int', 'NULL', '', '', '',
       ],
-      'primary_key' => 'custnum',
-      'unique' => [ [ 'agentnum', 'agent_custid' ] ],
-      #'index' => [ ['last'], ['company'] ],
-      'index' => [
-                   [ 'agentnum' ], [ 'refnum' ], [ 'classnum' ], [ 'usernum' ],
-                   [ 'custbatch' ],
-                   [ 'referral_custnum' ],
-                   [ 'payby' ], [ 'paydate' ],
-                   [ 'archived' ],
-                 ],
+      'primary_key'  => 'custnum',
+      'unique'       => [ [ 'agentnum', 'agent_custid' ] ],
+      #'index'        => [ ['last'], ['company'] ],
+      'index'        => [
+                          ['agentnum'], ['refnum'], ['classnum'], ['usernum'],
+                          [ 'custbatch' ],
+                          [ 'referral_custnum' ],
+                          [ 'payby' ], [ 'paydate' ],
+                          [ 'archived' ],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                          { columns    => [ 'salesnum' ],
+                            table      => 'sales',
+                          },
+                          { columns    => [ 'refnum' ],
+                            table      => 'part_referral',
+                          },
+                          { columns    => [ 'classnum' ],
+                            table      => 'cust_class',
+                          },
+                          { columns    => [ 'usernum' ],
+                            table      => 'access_user',
+                          },
+                          { columns    => [ 'referral_custnum' ],
+                            table      => 'cust_main',
+                            references => [ 'custnum' ],
+                          },
+                          { columns    => [ 'bill_locationnum' ],
+                            table      => 'cust_location',
+                            references => [ 'locationnum' ],
+                          },
+                          { columns    => [ 'ship_locationnum' ],
+                            table      => 'cust_location',
+                            references => [ 'locationnum' ],
+                          },
+                        ],
+    },
+
+    'cust_payby' => {
+      'columns' => [
+        'custpaybynum', 'serial',     '',        '', '', '', 
+        'custnum',         'int',     '',        '', '', '',
+        'weight',          'int',     '',        '', '', '', 
+        'payby',          'char',     '',         4, '', '', 
+        'payinfo',     'varchar', 'NULL',       512, '', '', 
+        'paycvv',      'varchar', 'NULL',       512, '', '', 
+        'paymask',     'varchar', 'NULL',   $char_d, '', '', 
+        #'paydate',   @date_type, '', '', 
+        'paydate',     'varchar', 'NULL',        10, '', '', 
+        'paystart_month',  'int', 'NULL',        '', '', '', 
+        'paystart_year',   'int', 'NULL',        '', '', '', 
+        'payissue',    'varchar', 'NULL',         2, '', '', 
+        'payname',     'varchar', 'NULL', 2*$char_d, '', '', 
+        'paystate',    'varchar', 'NULL',   $char_d, '', '', 
+        'paytype',     'varchar', 'NULL',   $char_d, '', '', 
+        'payip',       'varchar', 'NULL',        15, '', '', 
+        'locationnum',     'int', 'NULL',        '', '', '',
+      ],
+      'primary_key'  => 'custpaybynum',
+      'unique'       => [],
+      'index'        => [ [ 'custnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                          { columns    => [ 'locationnum' ],
+                            table      => 'cust_location',
+                          },
+                        ],
     },
 
     'cust_recon' => {  # (some sort of not-well understood thing for OnPac)
@@ -1148,11 +1674,25 @@ sub tables_hashref {
         'comment',   'varchar', 'NULL',     255, '', '', 
         'disabled',     'char', 'NULL',       1, '', '', 
       ],
-      'primary_key' => 'contactnum',
-      'unique'      => [],
-      'index'       => [ [ 'prospectnum' ], [ 'custnum' ], [ 'locationnum' ],
-                         [ 'last' ], [ 'first' ],
-                       ],
+      'primary_key'  => 'contactnum',
+      'unique'       => [],
+      'index'        => [ [ 'prospectnum' ], [ 'custnum' ], [ 'locationnum' ],
+                          [ 'last' ], [ 'first' ],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'prospectnum' ],
+                            table      => 'prospect_main',
+                          },
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                          { columns    => [ 'locationnum' ],
+                            table      => 'cust_location',
+                          },
+                          { columns    => [ 'classnum' ],
+                            table      => 'contact_class',
+                          },
+                        ],
     },
 
     'contact_phone' => {
@@ -1165,9 +1705,17 @@ sub tables_hashref {
         'extension',      'varchar', 'NULL',  7, '', '',
         #?#'comment',        'varchar',     '', $char_d, '', '', 
       ],
-      'primary_key' => 'contactphonenum',
-      'unique'      => [],
-      'index'       => [],
+      'primary_key'  => 'contactphonenum',
+      'unique'       => [],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'contactnum' ],
+                            table      => 'contact',
+                          },
+                          { columns    => [ 'phonetypenum' ],
+                            table      => 'phone_type',
+                          },
+                        ],
     },
 
     'phone_type' => {
@@ -1187,9 +1735,14 @@ sub tables_hashref {
         'contactnum',         'int', '',      '', '', '',
         'emailaddress',   'varchar', '', $char_d, '', '',
       ],
-      'primary_key' => 'contactemailnum',
-      'unique'      => [ [ 'emailaddress' ], ],
-      'index'       => [],
+      'primary_key'  => 'contactemailnum',
+      'unique'       => [ [ 'contactnum', 'emailaddress' ], ],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'contactnum' ],
+                            table      => 'contact',
+                          },
+                        ],
     },
 
     'prospect_main' => {
@@ -1201,9 +1754,17 @@ sub tables_hashref {
         'disabled',       'char', 'NULL',       1, '', '', 
         'custnum',         'int', 'NULL',      '', '', '',
       ],
-      'primary_key' => 'prospectnum',
-      'unique'      => [],
-      'index'       => [ [ 'company' ], [ 'agentnum' ], [ 'disabled' ] ],
+      'primary_key'  => 'prospectnum',
+      'unique'       => [],
+      'index'        => [ [ 'company' ], [ 'agentnum' ], [ 'disabled' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                        ],
     },
 
     'quotation' => {
@@ -1218,9 +1779,20 @@ sub tables_hashref {
         #'total',      @money_type,       '', '', 
         #'quotation_term', 'varchar', 'NULL', $char_d, '', '',
       ],
-      'primary_key' => 'quotationnum',
-      'unique' => [],
-      'index' => [ [ 'prospectnum' ], ['custnum'], ],
+      'primary_key'  => 'quotationnum',
+      'unique'       => [],
+      'index'        => [ [ 'prospectnum' ], ['custnum'], ],
+      'foreign_keys' => [
+                          { columns    => [ 'prospectnum' ],
+                            table      => 'prospect_main',
+                          },
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                          { columns    => [ 'usernum' ],
+                            table      => 'access_user',
+                          },
+                        ],
     },
 
     'quotation_pkg' => {
@@ -1235,9 +1807,20 @@ sub tables_hashref {
         'quantity',             'int', 'NULL', '', '', '',
         'waive_setup',         'char', 'NULL',  1, '', '', 
       ],
-      'primary_key' => 'quotationpkgnum',
-      'unique' => [],
-      'index' => [ ['pkgpart'], ],
+      'primary_key'  => 'quotationpkgnum',
+      'unique'       => [],
+      'index'        => [ ['pkgpart'], ],
+      'foreign_keys' => [
+                          { columns    => [ 'quotationnum' ],
+                            table      => 'quotation',
+                          },
+                          { columns    => [ 'pkgpart' ],
+                            table      => 'part_pkg',
+                          },
+                          { columns    => [ 'locationnum' ],
+                            table      => 'cust_location',
+                          },
+                        ],
     },
 
     'quotation_pkg_discount' => {
@@ -1247,9 +1830,17 @@ sub tables_hashref {
         'discountnum',                'int', '', '', '', '',
         #'end_date',              @date_type,         '', '',
       ],
-      'primary_key' => 'quotationpkgdiscountnum',
-      'unique' => [],
-      'index'  => [ [ 'quotationpkgnum' ], ], #[ 'discountnum' ] ],
+      'primary_key'  => 'quotationpkgdiscountnum',
+      'unique'       => [],
+      'index'        => [ [ 'quotationpkgnum' ], ], #[ 'discountnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'quotationpkgnum' ],
+                            table      => 'quotation_pkg',
+                          },
+                          { columns    => [ 'discountnum' ],
+                            table      => 'discount',
+                          },
+                        ],
     },
 
     'cust_location' => { #'location' now that its prospects too, but...
@@ -1277,12 +1868,20 @@ sub tables_hashref {
         'location_kind',      'char', 'NULL',       1, '', '',
         'disabled',           'char', 'NULL',       1, '', '', 
       ],
-      'primary_key' => 'locationnum',
-      'unique'      => [],
-      'index'       => [ [ 'prospectnum' ], [ 'custnum' ],
-                         [ 'county' ], [ 'state' ], [ 'country' ], [ 'zip' ],
-                         [ 'city' ], [ 'district' ]
-                       ],
+      'primary_key'  => 'locationnum',
+      'unique'       => [],
+      'index'        => [ [ 'prospectnum' ], [ 'custnum' ],
+                          [ 'county' ], [ 'state' ], [ 'country' ], [ 'zip' ],
+                          [ 'city' ], [ 'district' ]
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'prospectnum' ],
+                            table      => 'prospect_main',
+                          },
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                        ],
     },
 
     'cust_main_invoice' => {
@@ -1291,9 +1890,14 @@ sub tables_hashref {
         'custnum',  'int',  '',     '', '', '', 
         'dest',     'varchar', '',  $char_d, '', '', 
       ],
-      'primary_key' => 'destnum',
-      'unique' => [],
-      'index' => [ ['custnum'], ],
+      'primary_key'  => 'destnum',
+      'unique'       => [],
+      'index'        => [ ['custnum'], ],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                        ],
     },
 
     'cust_main_note' => {
@@ -1306,11 +1910,22 @@ sub tables_hashref {
         'usernum',   'int', 'NULL', '', '', '',
         'comments', 'text', 'NULL', '', '', '', 
       ],
-      'primary_key' => 'notenum',
-      'unique' => [],
-      'index' => [ [ 'custnum' ], [ '_date' ], [ 'usernum' ], ],
+      'primary_key'  => 'notenum',
+      'unique'       => [],
+      'index'        => [ [ 'custnum' ], [ '_date' ], [ 'usernum' ], ],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                          { columns    => [ 'classnum' ],
+                            table      => 'cust_note_class',
+                          },
+                          { columns    => [ 'usernum' ],
+                            table      => 'access_user',
+                          },
+                        ],
     },
-    
+
     'cust_note_class' => {
       'columns' => [
         'classnum',    'serial',   '',      '', '', '', 
@@ -1342,9 +1957,14 @@ sub tables_hashref {
         'tax',            'char', 'NULL',       1, '', '', 
         'disabled',       'char', 'NULL',       1, '', '', 
       ],
-      'primary_key' => 'classnum',
-      'unique' => [],
-      'index' => [ ['disabled'] ],
+      'primary_key'  => 'classnum',
+      'unique'       => [],
+      'index'        => [ ['disabled'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'categorynum' ],
+                            table      => 'cust_category',
+                          },
+                        ],
     },
  
     'cust_tag' => {
@@ -1353,9 +1973,17 @@ sub tables_hashref {
         'custnum',       'int', '', '', '', '',
         'tagnum',        'int', '', '', '', '',
       ],
-      'primary_key' => 'custtagnum',
-      'unique'      => [ [ 'custnum', 'tagnum' ] ],
-      'index'       => [ [ 'custnum' ] ],
+      'primary_key'  => 'custtagnum',
+      'unique'       => [ [ 'custnum', 'tagnum' ] ],
+      'index'        => [ [ 'custnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                          { columns    => [ 'tagnum' ],
+                            table      => 'part_tag',
+                          },
+                        ],
     },
 
     'part_tag' => {
@@ -1380,9 +2008,14 @@ sub tables_hashref {
         'exempt_number', 'varchar', 'NULL', $char_d, '', '',
         #start/end dates?  for reporting?
       ],
-      'primary_key' => 'exemptionnum',
-      'unique'      => [],
-      'index'       => [ [ 'custnum' ] ],
+      'primary_key'  => 'exemptionnum',
+      'unique'       => [],
+      'index'        => [ [ 'custnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                        ],
     },
 
     'cust_tax_adjustment' => {
@@ -1390,32 +2023,42 @@ sub tables_hashref {
         'adjustmentnum', 'serial',     '',      '', '', '',
         'custnum',          'int',     '',      '', '', '',
         'taxname',      'varchar',     '', $char_d, '', '',
-        'amount',    @money_type,                   '', '', 
-        'comment',     'varchar',  'NULL', $char_d, '', '', 
+        'amount',     @money_type,                  '', '', 
+        'currency',        'char', 'NULL',       3, '', '',
+        'comment',      'varchar', 'NULL', $char_d, '', '', 
         'billpkgnum',       'int', 'NULL',      '', '', '',
         #more?  no cust_bill_pkg_tax_location?
       ],
-      'primary_key' => 'adjustmentnum',
-      'unique'      => [],
-      'index'       => [ [ 'custnum' ], [ 'billpkgnum' ] ],
+      'primary_key'  => 'adjustmentnum',
+      'unique'       => [],
+      'index'        => [ [ 'custnum' ], [ 'billpkgnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                          { columns    => [ 'billpkgnum' ],
+                            table      => 'cust_bill_pkg',
+                          },
+                        ],
     },
 
     'cust_main_county' => { #district+city+county+state+country are checked 
                             #off the cust_main_county for validation and to 
                             #provide a tax rate.
       'columns' => [
-        'taxnum',   'serial',   '',    '', '', '', 
-        'district', 'varchar',  'NULL',    20, '', '',
-        'city',     'varchar',  'NULL',    $char_d, '', '',
-        'county',   'varchar',  'NULL',    $char_d, '', '', 
-        'state',    'varchar',  'NULL',    $char_d, '', '', 
-        'country',  'char',  '', 2, '', '', 
-        'taxclass',   'varchar', 'NULL', $char_d, '', '', 
-        'exempt_amount', @money_type, '', '', 
-        'tax',      'real',  '',    '', '', '', #tax %
-        'taxname',  'varchar',  'NULL',    $char_d, '', '', 
-        'setuptax',  'char', 'NULL', 1, '', '', # Y = setup tax exempt
-        'recurtax',  'char', 'NULL', 1, '', '', # Y = recur tax exempt
+        'taxnum',    'serial',     '',      '', '', '', 
+        'district', 'varchar', 'NULL',      20, '', '',
+        'city',     'varchar', 'NULL', $char_d, '', '',
+        'county',   'varchar', 'NULL', $char_d, '', '', 
+        'state',    'varchar', 'NULL', $char_d, '', '', 
+        'country',     'char',     '',       2, '', '', 
+        'taxclass', 'varchar', 'NULL', $char_d, '', '', 
+        'exempt_amount', @money_type,            '', '', 
+        'exempt_amount_currency', 'char', 'NULL', 3, '', '',
+        'tax',         'real',     '',      '', '', '', #tax %
+        'taxname',  'varchar', 'NULL', $char_d, '', '', 
+        'setuptax',    'char', 'NULL',       1, '', '', # Y = setup tax exempt
+        'recurtax',    'char', 'NULL',       1, '', '', # Y = recur tax exempt
       ],
       'primary_key' => 'taxnum',
       'unique' => [],
@@ -1458,9 +2101,14 @@ sub tables_hashref {
         'manual',      'char', 'NULL', 1, '', '',  # Y = manually edited
         'disabled',    'char', 'NULL', 1, '', '',  # Y = tax disabled
       ],
-      'primary_key' => 'taxnum',
-      'unique' => [],
-      'index' => [ ['taxclassnum'], ['data_vendor', 'geocode'] ],
+      'primary_key'  => 'taxnum',
+      'unique'       => [],
+      'index'        => [ ['taxclassnum'], ['data_vendor', 'geocode'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'taxclassnum' ],
+                            table      => 'tax_class',
+                          },
+                        ],
     },
 
     'tax_rate_location' => { 
@@ -1512,19 +2160,17 @@ sub tables_hashref {
 
     'cust_pay_pending' => {
       'columns' => [
-        'paypendingnum','serial',      '',  '', '', '',
-        'custnum',      'int',         '',  '', '', '', 
-        'paid',         @money_type,            '', '', 
-        '_date',        @date_type,             '', '', 
-        'payby',        'char',        '',   4, '', '', #CARD/BILL/COMP, should
-                                                        # be index into payby
-                                                        # table eventually
-        'payinfo',      'varchar', 'NULL', 512, '', '', #see cust_main above
-	'paymask',      'varchar', 'NULL', $char_d, '', '', 
-        'paydate',      'varchar', 'NULL', 10, '', '', 
+        'paypendingnum',      'serial',     '',      '', '', '',
+        'custnum',               'int',     '',      '', '', '', 
+        'paid',            @money_type,                  '', '', 
+        'currency',             'char', 'NULL',       3, '', '',
+        '_date',            @date_type,                  '', '', 
+        'payby',                'char',     '',       4, '', '',
+        'payinfo',           'varchar', 'NULL',     512, '', '',
+	'paymask',           'varchar', 'NULL', $char_d, '', '', 
+        'paydate',           'varchar', 'NULL',     10, '', '', 
         'recurring_billing', 'varchar', 'NULL', $char_d, '', '',
-        #'paybatch',     'varchar', 'NULL', $char_d, '', '', #for auditing purposes.
-        'payunique',    'varchar', 'NULL', $char_d, '', '', #separate paybatch "unique" functions from current usage
+        'payunique',         'varchar', 'NULL', $char_d, '', '', #separate paybatch "unique" functions from current usage
 
         'pkgnum', 'int', 'NULL', '', '', '', #desired pkgnum for pkg-balances
         'status',       'varchar',     '', $char_d, '', '', 
@@ -1533,88 +2179,153 @@ sub tables_hashref {
         'gatewaynum',   'int',     'NULL',  '', '', '',
         #'cust_balance', @money_type,            '', '',
         'paynum',       'int',     'NULL',  '', '', '',
-        'jobnum',       'int',     'NULL',  '', '', '', 
+        'jobnum',    'bigint',     'NULL',  '', '', '', 
+        'invnum',       'int',     'NULL',  '', '', '',
+        'manual',       'char',    'NULL',   1, '', '',
+        'discount_term','int',     'NULL',  '', '', '',
+        'failure_status','varchar','NULL',  16, '', '',
+        'order_number','varchar', 'NULL', $char_d, '', '', # transaction number
       ],
-      'primary_key' => 'paypendingnum',
-      'unique'      => [ [ 'payunique' ] ],
-      'index'       => [ [ 'custnum' ], [ 'status' ], ],
+      'primary_key'  => 'paypendingnum',
+      'unique'       => [ [ 'payunique' ] ],
+      'index'        => [ [ 'custnum' ], [ 'status' ], ],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                          { columns    => [ 'pkgnum' ],
+                            table      => 'cust_pkg',
+                          },
+                          { columns    => [ 'gatewaynum' ],
+                            table      => 'payment_gateway',
+                          },
+                          { columns    => [ 'paynum' ],
+                            table      => 'cust_pay',
+                          },
+                          { columns    => [ 'jobnum' ],
+                            table      => 'queue',
+                          },
+                          { columns    => [ 'invnum' ],
+                            table      => 'cust_bill',
+                          },
+                        ],
     },
 
     'cust_pay' => {
       'columns' => [
-        'paynum',   'serial',    '',   '', '', '',
-        'custnum',  'int',    '',   '', '', '', 
-        '_date',    @date_type, '', '', 
-        'paid',     @money_type, '', '', 
-        'otaker',   'varchar', 'NULL', 32, '', '',
-        'usernum',   'int', 'NULL', '', '', '',
-        'payby',    'char',   '',     4, '', '', # CARD/BILL/COMP, should be
-                                                 # index into payby table
-                                                 # eventually
-        'payinfo',  'varchar',   'NULL', 512, '', '', #see cust_main above
-        'paymask', 'varchar', 'NULL', $char_d, '', '', 
-        'paydate',  'varchar', 'NULL', 10, '', '', 
-        'paybatch', 'varchar',   'NULL', $char_d, '', '', #for auditing purposes.
-        'payunique', 'varchar', 'NULL', $char_d, '', '', #separate paybatch "unique" functions from current usage
-        'closed',    'char', 'NULL', 1, '', '', 
+        'paynum',       'serial',    '',       '', '', '',
+        'custnum',         'int',    '',       '', '', '', 
+        '_date',     @date_type,                   '', '', 
+        'paid',      @money_type,                  '', '', 
+        'currency',       'char', 'NULL',       3, '', '',
+        'otaker',      'varchar', 'NULL',      32, '', '',
+        'usernum',         'int', 'NULL',      '', '', '',
+        'payby',          'char',     '',       4, '', '',
+        'payinfo',     'varchar', 'NULL',     512, '', '',
+        'paymask',     'varchar', 'NULL', $char_d, '', '', 
+        'paydate',     'varchar', 'NULL',      10, '', '', 
+        'paybatch',    'varchar', 'NULL', $char_d, '', '',#for auditing purposes
+        'payunique',   'varchar', 'NULL', $char_d, '', '',#separate paybatch "unique" functions from current usage
+        'closed',         'char', 'NULL',       1, '', '', 
         'pkgnum', 'int', 'NULL', '', '', '', #desired pkgnum for pkg-balances
-        # cash/check deposit info fields
-        'bank',       'varchar', 'NULL', $char_d, '', '',
-        'depositor',  'varchar', 'NULL', $char_d, '', '',
-        'account',    'varchar', 'NULL', 20,      '', '',
-        'teller',     'varchar', 'NULL', 20,      '', '',
 
-        'batchnum',       'int', 'NULL', '', '', '', #pay_batch foreign key
+        # cash/check deposit info fields
+        'bank',        'varchar', 'NULL', $char_d, '', '',
+        'depositor',   'varchar', 'NULL', $char_d, '', '',
+        'account',     'varchar', 'NULL',      20, '', '',
+        'teller',      'varchar', 'NULL',      20, '', '',
+
+        'batchnum',        'int', 'NULL',      '', '', '',#pay_batch foreign key
 
         # credit card/EFT fields (formerly in paybatch)
-        'gatewaynum',     'int', 'NULL', '', '', '', # payment_gateway FK
-        'processor',  'varchar', 'NULL', $char_d, '', '', # module name
-        'auth',       'varchar','NULL',16, '', '', # CC auth number
-        'order_number','varchar','NULL',$char_d, '', '', # transaction number
+        'gatewaynum',      'int', 'NULL',      '', '', '', # payment_gateway FK
+        'processor',   'varchar', 'NULL', $char_d, '', '', # module name
+        'auth',        'varchar', 'NULL',      16, '', '', # CC auth number
+        'order_number','varchar', 'NULL', $char_d, '', '', # transaction number
       ],
-      'primary_key' => 'paynum',
+      'primary_key'  => 'paynum',
       #i guess not now, with cust_pay_pending, if we actually make it here, we _do_ want to record it# 'unique' => [ [ 'payunique' ] ],
-      'index' => [ [ 'custnum' ], [ 'paybatch' ], [ 'payby' ], [ '_date' ], [ 'usernum' ] ],
+      'index'        => [ ['custnum'], ['paybatch'], ['payby'], ['_date'],
+                          ['usernum'],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                          { columns    => [ 'usernum' ],
+                            table      => 'access_user',
+                          },
+                          { columns    => [ 'pkgnum' ],
+                            table      => 'cust_pkg',
+                          },
+                          { columns    => [ 'batchnum' ],
+                            table      => 'pay_batch',
+                          },
+                          { columns    => [ 'gatewaynum' ],
+                            table      => 'payment_gateway',
+                          },
+                        ],
     },
 
     'cust_pay_void' => {
       'columns' => [
-        'paynum',    'int',    '',   '', '', '', 
-        'custnum',   'int',    '',   '', '', '', 
-        '_date',     @date_type, '', '', 
-        'paid',      @money_type, '', '', 
-        'otaker',   'varchar', 'NULL', 32, '', '', 
-        'usernum',   'int', 'NULL', '', '', '',
-        'payby',     'char',   '',     4, '', '', # CARD/BILL/COMP, should be
-                                                  # index into payby table
-                                                  # eventually
-        'payinfo',   'varchar',   'NULL', 512, '', '', #see cust_main above
-	'paymask', 'varchar', 'NULL', $char_d, '', '', 
+        'paynum',          'int',    '',       '', '', '', 
+        'custnum',         'int',    '',       '', '', '', 
+        '_date',      @date_type,                  '', '', 
+        'paid',      @money_type,                  '', '', 
+        'currency',       'char', 'NULL',       3, '', '',
+        'otaker',      'varchar', 'NULL',      32, '', '', 
+        'usernum',         'int', 'NULL',      '', '', '',
+        'payby',          'char',     '',       4, '', '',
+        'payinfo',     'varchar', 'NULL',     512, '', '',
+	'paymask',     'varchar', 'NULL', $char_d, '', '', 
         #'paydate' ?
-        'paybatch',  'varchar',   'NULL', $char_d, '', '', #for auditing purposes.
-        'closed',    'char', 'NULL', 1, '', '', 
-        'pkgnum', 'int', 'NULL', '', '', '', #desired pkgnum for pkg-balances
+        'paybatch',    'varchar', 'NULL', $char_d, '', '', #for auditing purposes.
+        'closed',        'char',  'NULL',       1, '', '', 
+        'pkgnum', 'int',   'NULL', '', '', '', #desired pkgnum for pkg-balances
+
         # cash/check deposit info fields
         'bank',       'varchar', 'NULL', $char_d, '', '',
         'depositor',  'varchar', 'NULL', $char_d, '', '',
-        'account',    'varchar', 'NULL', 20,      '', '',
-        'teller',     'varchar', 'NULL', 20,      '', '',
-        'batchnum',       'int', 'NULL', '', '', '', #pay_batch foreign key
+        'account',    'varchar', 'NULL',      20, '', '',
+        'teller',     'varchar', 'NULL',      20, '', '',
+        'batchnum',       'int', 'NULL',      '', '', '', #pay_batch foreign key
 
         # credit card/EFT fields (formerly in paybatch)
-        'gatewaynum',     'int', 'NULL', '', '', '', # payment_gateway FK
-        'processor',  'varchar', 'NULL', $char_d, '', '', # module name
-        'auth',       'varchar','NULL',16, '', '', # CC auth number
-        'order_number', 'varchar','NULL',$char_d, '', '', # transaction number
+        'gatewaynum',      'int', 'NULL',      '', '', '', # payment_gateway FK
+        'processor',   'varchar', 'NULL', $char_d, '', '', # module name
+        'auth',        'varchar', 'NULL',      16, '', '', # CC auth number
+        'order_number','varchar', 'NULL', $char_d, '', '', # transaction number
 
         #void fields
-        'void_date', @date_type, '', '', 
-        'reason',    'varchar',   'NULL', $char_d, '', '', 
-        'void_usernum',   'int', 'NULL', '', '', '',
+        'void_date',  @date_type,                  '', '', 
+        'reason',      'varchar', 'NULL', $char_d, '', '', 
+        'void_usernum',    'int', 'NULL',      '', '', '',
       ],
-      'primary_key' => 'paynum',
-      'unique' => [],
-      'index' => [ [ 'custnum' ], [ 'usernum' ], [ 'void_usernum' ] ],
+      'primary_key'  => 'paynum',
+      'unique'       => [],
+      'index'        => [ ['custnum'], ['usernum'], ['void_usernum'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                          { columns    => [ 'usernum' ],
+                            table      => 'access_user',
+                          },
+                          { columns    => [ 'pkgnum' ],
+                            table      => 'cust_pkg',
+                          },
+                          { columns    => [ 'batchnum' ],
+                            table      => 'pay_batch',
+                          },
+                          { columns    => [ 'gatewaynum' ],
+                            table      => 'payment_gateway',
+                          },
+                          { columns    => [ 'void_usernum' ],
+                            table      => 'access_user',
+                            references => [ 'usernum' ],
+                          },
+                        ],
     },
 
     'cust_bill_pay' => {
@@ -1626,9 +2337,20 @@ sub tables_hashref {
         '_date',   @date_type, '', '', 
         'pkgnum', 'int', 'NULL', '', '', '', #desired pkgnum for pkg-balances
       ],
-      'primary_key' => 'billpaynum',
-      'unique' => [],
-      'index' => [ [ 'paynum' ], [ 'invnum' ] ],
+      'primary_key'  => 'billpaynum',
+      'unique'       => [],
+      'index'        => [ [ 'paynum' ], [ 'invnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'invnum' ],
+                            table      => 'cust_bill',
+                          },
+                          { columns    => [ 'paynum' ],
+                            table      => 'cust_pay',
+                          },
+                          { columns    => [ 'pkgnum' ],
+                            table      => 'cust_pkg',
+                          },
+                        ],
     },
 
     'cust_bill_pay_batch' => {
@@ -1639,9 +2361,17 @@ sub tables_hashref {
         'amount',  @money_type, '', '', 
         '_date',   @date_type, '', '', 
       ],
-      'primary_key' => 'billpaynum',
-      'unique' => [],
-      'index' => [ [ 'paybatchnum' ], [ 'invnum' ] ],
+      'primary_key'  => 'billpaynum',
+      'unique'       => [],
+      'index'        => [ [ 'paybatchnum' ], [ 'invnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'invnum' ],
+                            table      => 'cust_bill',
+                          },
+                          { columns    => [ 'paybatchnum' ],
+                            table      => 'cust_pay_batch',
+                          },
+                        ],
     },
 
     'cust_bill_pay_pkg' => {
@@ -1656,9 +2386,23 @@ sub tables_hashref {
 	'sdate',   @date_type, '', '', 
         'edate',   @date_type, '', '', 
       ],
-      'primary_key' => 'billpaypkgnum',
-      'unique'      => [],
-      'index'       => [ [ 'billpaynum' ], [ 'billpkgnum' ], ],
+      'primary_key'  => 'billpaypkgnum',
+      'unique'       => [],
+      'index'        => [ [ 'billpaynum' ], [ 'billpkgnum' ], ],
+      'foreign_keys' => [
+                          { columns    => [ 'billpaynum' ],
+                            table      => 'cust_bill_pay',
+                          },
+                          { columns    => [ 'billpkgnum' ],
+                            table      => 'cust_bill_pkg',
+                          },
+                          { columns    => [ 'billpkgtaxlocationnum' ],
+                            table      => 'cust_bill_pkg_tax_location',
+                          },
+                          { columns    => [ 'billpkgtaxratelocationnum' ],
+                            table      => 'cust_bill_pkg_tax_rate_location',
+                          },
+                        ],
     },
 
     'pay_batch' => { #batches of payments to an external processor
@@ -1671,38 +2415,55 @@ sub tables_hashref {
         'upload',         @date_type,     '', '', 
         'title',   'varchar', 'NULL',255, '', '',
       ],
-      'primary_key' => 'batchnum',
-      'unique' => [],
-      'index' => [],
+      'primary_key'  => 'batchnum',
+      'unique'       => [],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                        ],
     },
 
     'cust_pay_batch' => { #list of customers in current CARD/CHEK batch
       'columns' => [
-        'paybatchnum',   'serial',    '',   '', '', '', 
-        'batchnum',   'int',    '',   '', '', '', 
-        'invnum',   'int',    '',   '', '', '', 
-        'custnum',   'int',    '',   '', '', '', 
-        'last',     'varchar', '',     $char_d, '', '', 
-        'first',    'varchar', '',     $char_d, '', '', 
-        'address1', 'varchar', '',     $char_d, '', '', 
-        'address2', 'varchar', 'NULL', $char_d, '', '', 
-        'city',     'varchar', '',     $char_d, '', '', 
-        'state',    'varchar', 'NULL', $char_d, '', '', 
-        'zip',      'varchar', 'NULL', 10, '', '', 
-        'country',  'char', '',     2, '', '', 
-        #        'trancode', 'int', '', '', '', ''
-        'payby',    'char',        '',       4, '', '',
-        'payinfo',  'varchar', 'NULL',     512, '', '', 
-        #'exp',      @date_type, '', ''
-        'exp',      'varchar', 'NULL',      11, '', '', 
-        'payname',  'varchar', 'NULL', $char_d, '', '', 
-        'amount',   @money_type, '', '', 
-        'status',   'varchar', 'NULL', $char_d, '', '', 
-        'error_message',   'varchar', 'NULL', $char_d, '', '',
+        'paybatchnum',    'serial',     '',      '', '', '', 
+        'batchnum',          'int',     '',      '', '', '', 
+        'invnum',            'int',     '',      '', '', '', 
+        'custnum',           'int',     '',      '', '', '', 
+        'last',          'varchar',     '', $char_d, '', '', 
+        'first',         'varchar',     '', $char_d, '', '', 
+        'address1',      'varchar',     '', $char_d, '', '', 
+        'address2',      'varchar', 'NULL', $char_d, '', '', 
+        'city',          'varchar',     '', $char_d, '', '', 
+        'state',         'varchar', 'NULL', $char_d, '', '', 
+        'zip',           'varchar', 'NULL',      10, '', '', 
+        'country',          'char',     '',       2, '', '', 
+        'payby',            'char',     '',       4, '', '',
+        'payinfo',       'varchar', 'NULL',     512, '', '', 
+        #'exp',          @date_type,                  '', '',
+        'exp',           'varchar', 'NULL',      11, '', '', 
+        'payname',       'varchar', 'NULL', $char_d, '', '', 
+        'amount',      @money_type,                  '', '', 
+        'currency',         'char', 'NULL',       3, '', '',
+        'status',        'varchar', 'NULL', $char_d, '', '', 
+        'failure_status','varchar', 'NULL',      16, '', '',
+        'error_message', 'varchar', 'NULL', $char_d, '', '',
       ],
-      'primary_key' => 'paybatchnum',
-      'unique' => [],
-      'index' => [ ['batchnum'], ['invnum'], ['custnum'] ],
+      'primary_key'  => 'paybatchnum',
+      'unique'       => [],
+      'index'        => [ ['batchnum'], ['invnum'], ['custnum'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'batchnum' ],
+                            table      => 'pay_batch',
+                          },
+                          { columns    => [ 'invnum' ],
+                            table      => 'cust_bill',
+                          },
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                        ],
     },
 
     'fcc477map' => {
@@ -1725,6 +2486,7 @@ sub tables_hashref {
         'locationnum',         'int', 'NULL', '', '', '',
         'otaker',          'varchar', 'NULL', 32, '', '', 
         'usernum',             'int', 'NULL', '', '', '',
+        'salesnum',            'int', 'NULL', '', '', '', 
         'order_date',     @date_type,             '', '', 
         'start_date',     @date_type,             '', '', 
         'setup',          @date_type,             '', '', 
@@ -1753,16 +2515,69 @@ sub tables_hashref {
         'waive_setup',        'char', 'NULL',  1, '', '', 
         'recur_show_zero',    'char', 'NULL',  1, '', '',
         'setup_show_zero',    'char', 'NULL',  1, '', '',
+        'change_to_pkgnum',    'int', 'NULL', '', '', '',
       ],
-      'primary_key' => 'pkgnum',
-      'unique' => [],
-      'index' => [ ['custnum'], ['pkgpart'], [ 'pkgbatch' ], [ 'locationnum' ],
-                   [ 'usernum' ], [ 'agent_pkgid' ],
-                   ['order_date'], [ 'start_date' ], ['setup'], ['bill'],
-                   ['last_bill'], ['susp'], ['adjourn'], ['cancel'],
-                   ['expire'], ['contract_end'], ['change_date'], ['no_auto'],
-                 ],
-    },
+      'primary_key'  => 'pkgnum',
+      'unique'       => [],
+      'index'        => [ ['custnum'], ['pkgpart'], ['pkgbatch'],
+                          ['locationnum'], ['usernum'], ['agent_pkgid'],
+                          ['order_date'], [ 'start_date' ], ['setup'], ['bill'],
+                          ['last_bill'], ['susp'], ['adjourn'], ['cancel'],
+                          ['expire'], ['contract_end'], ['change_date'],
+                          ['no_auto'],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                          { columns    => [ 'pkgpart' ],
+                            table      => 'part_pkg',
+                          },
+                          { columns    => [ 'contactnum' ],
+                            table      => 'contact',
+                          },
+                          { columns    => [ 'locationnum' ],
+                            table      => 'cust_location',
+                          },
+                          { columns    => [ 'usernum' ],
+                            table      => 'access_user',
+                          },
+                          { columns    => [ 'salesnum' ],
+                            table      => 'sales',
+                          },
+                          { columns    => [ 'uncancel_pkgnum' ],
+                            table      => 'cust_pkg',
+                            references => [ 'pkgnum' ],
+                          },
+                          { columns    => [ 'change_pkgnum' ],
+                            table      => 'cust_pkg',
+                            references => [ 'pkgnum' ],
+                          },
+                          { columns    => [ 'change_pkgpart' ],
+                            table      => 'part_pkg',
+                            references => [ 'pkgpart' ],
+                          },
+                          { columns    => [ 'change_locationnum' ],
+                            table      => 'cust_location',
+                            references => [ 'locationnum' ],
+                          },
+                          { columns    => [ 'change_custnum' ],
+                            table      => 'cust_main',
+                            references => [ 'custnum' ],
+                          },
+                          { columns    => [ 'main_pkgnum' ],
+                            table      => 'cust_pkg',
+                            references => [ 'pkgnum' ],
+                          },
+                          { columns    => [ 'pkglinknum' ],
+                            table      => 'part_pkg_link',
+                          },
+                          { columns    => [ 'change_to_pkgnum' ],
+                            table      => 'cust_pkg',
+                            references => [ 'pkgnum' ],
+                          },
+                        ],
+   },
 
     'cust_pkg_option' => {
       'columns' => [
@@ -1771,9 +2586,14 @@ sub tables_hashref {
         'optionname', 'varchar', '', $char_d, '', '', 
         'optionvalue', 'text', 'NULL', '', '', '', 
       ],
-      'primary_key' => 'optionnum',
-      'unique'      => [],
-      'index'       => [ [ 'pkgnum' ], [ 'optionname' ] ],
+      'primary_key'  => 'optionnum',
+      'unique'       => [],
+      'index'        => [ [ 'pkgnum' ], [ 'optionname' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'pkgnum' ],
+                            table      => 'cust_pkg',
+                          },
+                        ],
     },
 
     'cust_pkg_detail' => {
@@ -1784,9 +2604,14 @@ sub tables_hashref {
         'detailtype',     'char', '',       1, '', '', # "I"nvoice or "C"omment
         'weight',          'int', '',      '', '', '',
       ],
-      'primary_key' => 'pkgdetailnum',
-      'unique' => [],
-      'index'  => [ [ 'pkgnum', 'detailtype' ] ],
+      'primary_key'  => 'pkgdetailnum',
+      'unique'       => [],
+      'index'        => [ [ 'pkgnum', 'detailtype' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'pkgnum' ],
+                            table      => 'cust_pkg',
+                          },
+                        ],
     },
 
     'cust_pkg_reason' => {
@@ -1799,9 +2624,20 @@ sub tables_hashref {
         'usernum',   'int', 'NULL', '', '', '',
         'date',     @date_type, '', '', 
       ],
-      'primary_key' => 'num',
-      'unique' => [],
-      'index' => [ [ 'pkgnum' ], [ 'reasonnum' ], ['action'], [ 'usernum' ], ],
+      'primary_key'  => 'num',
+      'unique'       => [],
+      'index'        => [ ['pkgnum'], ['reasonnum'], ['action'], ['usernum'], ],
+      'foreign_keys' => [
+                          { columns    => [ 'pkgnum' ],
+                            table      => 'cust_pkg',
+                          },
+                          { columns    => [ 'reasonnum' ],
+                            table      => 'reason',
+                          },
+                          { columns    => [ 'usernum' ],
+                            table      => 'access_user',
+                          },
+                        ],
     },
 
     'cust_pkg_discount' => {
@@ -1815,9 +2651,20 @@ sub tables_hashref {
         'usernum',           'int', 'NULL',    '', '', '',
         'disabled',         'char', 'NULL',     1, '', '', 
       ],
-      'primary_key' => 'pkgdiscountnum',
-      'unique' => [],
-      'index'  => [ [ 'pkgnum' ], [ 'discountnum' ], [ 'usernum' ], ],
+      'primary_key'  => 'pkgdiscountnum',
+      'unique'       => [],
+      'index'        => [ [ 'pkgnum' ], [ 'discountnum' ], [ 'usernum' ], ],
+      'foreign_keys' => [
+                          { columns    => [ 'pkgnum' ],
+                            table      => 'cust_pkg',
+                          },
+                          { columns    => [ 'discountnum' ],
+                            table      => 'discount',
+                          },
+                          { columns    => [ 'usernum' ],
+                            table      => 'access_user',
+                          },
+                        ],
     },
 
     'cust_pkg_usage' => {
@@ -1827,9 +2674,17 @@ sub tables_hashref {
         'minutes',        'int', '', '', '', '',
         'pkgusagepart',   'int', '', '', '', '',
       ],
-      'primary_key' => 'pkgusagenum',
-      'unique' => [],
-      'index'  => [ [ 'pkgnum' ], [ 'pkgusagepart' ] ],
+      'primary_key'  => 'pkgusagenum',
+      'unique'       => [],
+      'index'        => [ [ 'pkgnum' ], [ 'pkgusagepart' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'pkgnum' ],
+                            table      => 'cust_pkg',
+                          },
+                          { columns    => [ 'pkgusagepart' ],
+                            table      => 'part_pkg_usage',
+                          },
+                        ],
     },
 
     'cdr_cust_pkg_usage' => {
@@ -1839,9 +2694,17 @@ sub tables_hashref {
         'pkgusagenum', 'int',       '', '', '', '',
         'minutes',     'int',       '', '', '', '',
       ],
-      'primary_key' => 'cdrusagenum',
-      'unique' => [],
-      'index'  => [ [ 'pkgusagenum' ], [ 'acctid' ] ],
+      'primary_key'  => 'cdrusagenum',
+      'unique'       => [],
+      'index'        => [ [ 'pkgusagenum' ], [ 'acctid' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'acctid' ],
+                            table      => 'cdr',
+                          },
+                          { columns    => [ 'pkgusagenum' ],
+                            table      => 'cust_pkg_usage',
+                          },
+                        ],
     },
 
     'cust_bill_pkg_discount' => {
@@ -1852,9 +2715,17 @@ sub tables_hashref {
         'amount',          @money_type,                '', '', 
         'months',            'decimal', 'NULL', '7,4', '', '',
       ],
-      'primary_key' => 'billpkgdiscountnum',
-      'unique' => [],
-      'index' => [ [ 'billpkgnum' ], [ 'pkgdiscountnum' ] ],
+      'primary_key'  => 'billpkgdiscountnum',
+      'unique'       => [],
+      'index'        => [ [ 'billpkgnum' ], [ 'pkgdiscountnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'billpkgnum' ],
+                            table      => 'cust_bill_pkg',
+                          },
+                          { columns    => [ 'pkgdiscountnum' ],
+                            table      => 'cust_pkg_discount',
+                          },
+                        ],
     },
 
     'cust_bill_pkg_discount_void' => {
@@ -1865,15 +2736,24 @@ sub tables_hashref {
         'amount',          @money_type,                '', '', 
         'months',            'decimal', 'NULL', '7,4', '', '',
       ],
-      'primary_key' => 'billpkgdiscountnum',
-      'unique' => [],
-      'index' => [ [ 'billpkgnum' ], [ 'pkgdiscountnum' ] ],
+      'primary_key'  => 'billpkgdiscountnum',
+      'unique'       => [],
+      'index'        => [ [ 'billpkgnum' ], [ 'pkgdiscountnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'billpkgnum' ],
+                            table      => 'cust_bill_pkg_void',
+                          },
+                          { columns    => [ 'pkgdiscountnum' ],
+                            table      => 'cust_pkg_discount',
+                          },
+                        ],
     },
 
     'discount' => {
       'columns' => [
         'discountnum', 'serial',     '',      '', '', '',
         #'agentnum',       'int', 'NULL',      '', '', '', 
+        'classnum',       'int', 'NULL',      '', '', '',
         'name',       'varchar', 'NULL', $char_d, '', '',
         'amount',   @money_type,                  '', '', 
         'percent',    'decimal',     '',   '7,4', '', '',
@@ -1882,9 +2762,26 @@ sub tables_hashref {
         'setup',         'char', 'NULL',       1, '', '', 
         #'linked',        'char', 'NULL',       1, '', '',
       ],
-      'primary_key' => 'discountnum',
+      'primary_key'  => 'discountnum',
+      'unique'       => [],
+      'index'        => [], # [ 'agentnum' ], ],
+      'foreign_keys' => [
+                          { columns    => [ 'classnum' ],
+                            table      => 'discount_class',
+                          },
+                        ],
+    },
+
+    'discount_class' => {
+      'columns' => [
+        'classnum',    'serial',   '',      '', '', '', 
+        'classname',   'varchar',  '', $char_d, '', '', 
+        #'categorynum', 'int',  'NULL',      '', '', '', 
+        'disabled',    'char', 'NULL',       1, '', '', 
+      ],
+      'primary_key' => 'classnum',
       'unique' => [],
-      'index'  => [], # [ 'agentnum' ], ],
+      'index' => [ ['disabled'] ],
     },
 
     'cust_refund' => {
@@ -1893,6 +2790,7 @@ sub tables_hashref {
         'custnum',  'int',    '',   '', '', '', 
         '_date',        @date_type, '', '', 
         'refund',       @money_type, '', '', 
+        'currency',       'char', 'NULL',       3, '', '',
         'otaker',       'varchar',   'NULL',   32, '', '', 
         'usernum',   'int', 'NULL', '', '', '',
         'reason',       'varchar',   '',   $char_d, '', '', 
@@ -1909,9 +2807,20 @@ sub tables_hashref {
         'auth',       'varchar','NULL',16, '', '', # CC auth number
         'order_number', 'varchar','NULL',$char_d, '', '', # transaction number
       ],
-      'primary_key' => 'refundnum',
-      'unique' => [],
-      'index' => [ ['custnum'], ['_date'], [ 'usernum' ], ],
+      'primary_key'  => 'refundnum',
+      'unique'       => [],
+      'index'        => [ ['custnum'], ['_date'], [ 'usernum' ], ],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                          { columns    => [ 'usernum' ],
+                            table      => 'access_user',
+                          },
+                          { columns    => [ 'gatewaynum' ],
+                            table      => 'payment_gateway',
+                          },
+                        ],
     },
 
     'cust_credit_refund' => {
@@ -1922,9 +2831,17 @@ sub tables_hashref {
         'amount',  @money_type, '', '', 
         '_date',   @date_type, '', '', 
       ],
-      'primary_key' => 'creditrefundnum',
-      'unique' => [],
-      'index' => [ ['crednum'], ['refundnum'] ],
+      'primary_key'  => 'creditrefundnum',
+      'unique'       => [],
+      'index'        => [ ['crednum'], ['refundnum'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'crednum' ],
+                            table      => 'cust_credit',
+                          },
+                          { columns    => [ 'refundnum' ],
+                            table      => 'cust_refund',
+                          },
+                        ],
     },
 
 
@@ -1936,9 +2853,19 @@ sub tables_hashref {
         'agent_svcid',    'int', 'NULL', '', '', '',
         'overlimit',           @date_type,   '', '', 
       ],
-      'primary_key' => 'svcnum',
-      'unique' => [],
-      'index' => [ ['svcnum'], ['pkgnum'], ['svcpart'], [ 'agent_svcid' ] ],
+      'primary_key'  => 'svcnum',
+      'unique'       => [],
+      'index'        => [ ['svcnum'], ['pkgnum'], ['svcpart'],
+                          ['agent_svcid'],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'pkgnum' ],
+                            table      => 'cust_pkg',
+                          },
+                          { columns    => [ 'svcpart' ],
+                            table      => 'part_svc',
+                          },
+                        ],
     },
 
     'cust_svc_option' => {
@@ -1948,9 +2875,14 @@ sub tables_hashref {
         'optionname',  'varchar', '', $char_d, '', '', 
         'optionvalue', 'text', 'NULL', '', '', '', 
       ],
-      'primary_key' => 'optionnum',
-      'unique'      => [],
-      'index'       => [ [ 'svcnum' ], [ 'optionname' ] ],
+      'primary_key'  => 'optionnum',
+      'unique'       => [],
+      'index'        => [ [ 'svcnum' ], [ 'optionname' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                        ],
     },
 
     'svc_export_machine' => {
@@ -1960,9 +2892,20 @@ sub tables_hashref {
         'exportnum',              'int', '', '', '', '', 
         'machinenum',             'int', '', '', '', '',
       ],
-      'primary_key' => 'svcexportmachinenum',
-      'unique'      => [ ['svcnum', 'exportnum'] ],
-      'index'       => [],
+      'primary_key'  => 'svcexportmachinenum',
+      'unique'       => [ ['svcnum', 'exportnum'] ],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                          { columns    => [ 'exportnum' ],
+                            table      => 'part_export',
+                          },
+                          { columns    => [ 'machinenum' ],
+                            table      => 'part_export_machine',
+                          },
+                        ],
     },
 
     'part_export_machine' => {
@@ -1972,9 +2915,14 @@ sub tables_hashref {
         'machine',    'varchar', 'NULL', $char_d, '', '', 
         'disabled',      'char', 'NULL',       1, '', '',
       ],
-      'primary_key' => 'machinenum',
-      'unique'      => [ [ 'exportnum', 'machine' ] ],
-      'index'       => [ [ 'exportnum' ] ],
+      'primary_key'  => 'machinenum',
+      'unique'       => [ [ 'exportnum', 'machine' ] ],
+      'index'        => [ [ 'exportnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'exportnum' ],
+                            table      => 'part_export',
+                          },
+                        ],
     },
 
    'part_pkg' => {
@@ -2005,12 +2953,36 @@ sub tables_hashref {
         'setup_show_zero',  'char', 'NULL',  1, '', '',
         'successor',     'int',     'NULL', '', '', '',
         'family_pkgpart','int',     'NULL', '', '', '',
+        'delay_start',   'int',     'NULL', '', '', '',
       ],
-      'primary_key' => 'pkgpart',
-      'unique' => [],
-      'index' => [ [ 'promo_code' ], [ 'disabled' ], [ 'classnum' ],
-                   [ 'agentnum' ], ['no_auto'],
-                 ],
+      'primary_key'  => 'pkgpart',
+      'unique'       => [],
+      'index'        => [ [ 'promo_code' ], [ 'disabled' ], [ 'classnum' ],
+                          [ 'agentnum' ], ['no_auto'],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'classnum' ],
+                            table      => 'pkg_class',
+                          },
+                          { columns    => [ 'addon_classnum' ],
+                            table      => 'pkg_class',
+                            references => [ 'classnum' ],
+                          },
+                          { columns    => [ 'taxproductnum' ],
+                            table      => 'part_pkg_taxproduct',
+                          },
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                          { columns    => [ 'successor' ],
+                            table      => 'part_pkg',
+                            references => [ 'pkgpart' ],
+                          },
+                          { columns    => [ 'family_pkgpart' ],
+                            table      => 'part_pkg',
+                            references => [ 'pkgpart' ],
+                          },
+                        ],
     },
 
     'part_pkg_msgcat' => {
@@ -2021,8 +2993,43 @@ sub tables_hashref {
         'pkg',           'varchar',     '',   $char_d, '', '', #longer/no limit?
         'comment',       'varchar', 'NULL', 2*$char_d, '', '', #longer/no limit?
       ],
-      'primary_key' => 'pkgpartmsgnum',
-      'unique'      => [ [ 'pkgpart', 'locale' ] ],
+      'primary_key'  => 'pkgpartmsgnum',
+      'unique'       => [ [ 'pkgpart', 'locale' ] ],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'pkgpart' ],
+                            table      => 'part_pkg',
+                          },
+                        ],
+    },
+
+    'part_pkg_currency' => {
+      'columns' => [
+        'pkgcurrencynum', 'serial', '',      '', '', '',
+        'pkgpart',           'int', '',      '', '', '',
+        'currency',         'char', '',       3, '', '',
+        'optionname',    'varchar', '', $char_d, '', '', 
+        'optionvalue',      'text', '',      '', '', '', 
+      ],
+      'primary_key'  => 'pkgcurrencynum',
+      'unique'       => [ [ 'pkgpart', 'currency', 'optionname' ] ],
+      'index'        => [ ['pkgpart'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'pkgpart' ],
+                            table      => 'part_pkg',
+                          },
+                        ],
+    },
+
+    'currency_exchange' => {
+      'columns' => [
+        'currencyratenum', 'serial', '',    '', '', '',
+        'from_currency',     'char', '',     3, '', '',
+        'to_currency',       'char', '',     3, '', '',
+        'rate',           'decimal', '', '7,6', '', '',
+      ],
+      'primary_key' => 'currencyratenum',
+      'unique'      => [ [ 'from_currency', 'to_currency' ] ],
       'index'       => [],
     },
 
@@ -2034,9 +3041,19 @@ sub tables_hashref {
         'link_type',   'varchar',  '', $char_d, '', '',
         'hidden',      'char', 'NULL',       1, '', '',
       ],
-      'primary_key' => 'pkglinknum',
-      'unique' => [ [ 'src_pkgpart', 'dst_pkgpart', 'link_type', 'hidden' ] ],
-      'index'  => [ [ 'src_pkgpart' ] ],
+      'primary_key'  => 'pkglinknum',
+      'unique'       => [ ['src_pkgpart','dst_pkgpart','link_type','hidden'] ],
+      'index'        => [ [ 'src_pkgpart' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'src_pkgpart' ],
+                            table      => 'part_pkg',
+                            references => [ 'pkgpart' ]
+                          },
+                          { columns    => [ 'dst_pkgpart' ],
+                            table      => 'part_pkg',
+                            references => [ 'pkgpart' ]
+                          },
+                        ],
     },
     # XXX somewhat borked unique: we don't really want a hidden and unhidden
     # it turns out we'd prefer to use svc, bill, and invisibill (or something)
@@ -2047,9 +3064,17 @@ sub tables_hashref {
         'pkgpart',        'int',      '',      '', '', '',
         'discountnum',    'int',      '',      '', '', '', 
       ],
-      'primary_key' => 'pkgdiscountnum',
-      'unique' => [ [ 'pkgpart', 'discountnum' ] ],
-      'index'  => [],
+      'primary_key'  => 'pkgdiscountnum',
+      'unique'       => [ [ 'pkgpart', 'discountnum' ] ],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'pkgpart' ],
+                            table      => 'part_pkg',
+                          },
+                          { columns    => [ 'discountnum' ],
+                            table      => 'discount',
+                          },
+                        ],
     },
 
     'part_pkg_taxclass' => {
@@ -2092,9 +3117,21 @@ sub tables_hashref {
         'effdate',          @date_type, '', '', 
         'taxable',          'char',    'NULL', 1,       '', '', 
       ],
-      'primary_key' => 'pkgtaxratenum',
-      'unique' => [],
-      'index' => [ [ 'data_vendor', 'geocode', 'taxproductnum' ] ],
+      'primary_key'  => 'pkgtaxratenum',
+      'unique'       => [],
+      'index'        => [ [ 'data_vendor', 'geocode', 'taxproductnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'taxproductnum' ],
+                            table      => 'part_pkg_taxproduct',
+                          },
+                          { columns    => [ 'taxclassnumtaxed' ],
+                            table      => 'tax_class',
+                            references => [ 'taxclassnum' ],
+                          },
+                          { columns    => [ 'taxclassnum' ],
+                            table      => 'tax_class',
+                          },
+                        ],
     },
 
     'part_pkg_taxoverride' => { 
@@ -2104,9 +3141,17 @@ sub tables_hashref {
         'taxclassnum',       'int', '', '', '', '',
         'usage_class',    'varchar', 'NULL', $char_d, '', '', 
       ],
-      'primary_key' => 'taxoverridenum',
-      'unique' => [],
-      'index' => [ [ 'pkgpart' ], [ 'taxclassnum' ] ],
+      'primary_key'  => 'taxoverridenum',
+      'unique'       => [],
+      'index'        => [ [ 'pkgpart' ], [ 'taxclassnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'pkgpart' ],
+                            table      => 'part_pkg',
+                          },
+                          { columns    => [ 'taxclassnum' ],
+                            table      => 'tax_class',
+                          },
+                        ],
     },
 
 #    'part_title' => {
@@ -2121,16 +3166,25 @@ sub tables_hashref {
 
     'pkg_svc' => {
       'columns' => [
-        'pkgsvcnum',  'serial', '',  '', '', '', 
-        'pkgpart',    'int',    '',   '', '', '', 
-        'svcpart',    'int',    '',   '', '', '', 
-        'quantity',   'int',    '',   '', '', '', 
-        'primary_svc','char', 'NULL',  1, '', '', 
-        'hidden',     'char', 'NULL',  1, '', '',
+        'pkgsvcnum',   'serial',    '', '', '', '', 
+        'pkgpart',        'int',    '', '', '', '', 
+        'svcpart',        'int',    '', '', '', '', 
+        'quantity',       'int',    '', '', '', '', 
+        'primary_svc',   'char', 'NULL', 1, '', '', 
+        'hidden',        'char', 'NULL', 1, '', '',
+        'bulk_skip',     'char', 'NULL', 1, '', '',
       ],
-      'primary_key' => 'pkgsvcnum',
-      'unique' => [ ['pkgpart', 'svcpart'] ],
-      'index' => [ ['pkgpart'], ['quantity'] ],
+      'primary_key'  => 'pkgsvcnum',
+      'unique'       => [ ['pkgpart', 'svcpart'] ],
+      'index'        => [ ['pkgpart'], ['quantity'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'pkgpart' ],
+                            table      => 'part_pkg',
+                          },
+                          { columns    => [ 'svcpart' ],
+                            table      => 'part_svc',
+                          },
+                        ],
     },
 
     'part_referral' => {
@@ -2140,9 +3194,14 @@ sub tables_hashref {
         'disabled', 'char',   'NULL',         1, '', '', 
         'agentnum', 'int',    'NULL',        '', '', '', 
       ],
-      'primary_key' => 'refnum',
-      'unique' => [],
-      'index' => [ ['disabled'], ['agentnum'], ],
+      'primary_key'  => 'refnum',
+      'unique'       => [],
+      'index'        => [ ['disabled'], ['agentnum'], ],
+      'foreign_keys' => [
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                        ],
     },
 
     'part_svc' => {
@@ -2155,10 +3214,16 @@ sub tables_hashref {
         'selfservice_access', 'varchar', 'NULL',   $char_d, '', '',
         'classnum',               'int', 'NULL',        '', '', '',
         'restrict_edit_password','char', 'NULL',         1, '', '',
+        'has_router',            'char', 'NULL',         1, '', '',
 ],
-      'primary_key' => 'svcpart',
-      'unique' => [],
-      'index' => [ [ 'disabled' ] ],
+      'primary_key'  => 'svcpart',
+      'unique'       => [],
+      'index'        => [ [ 'disabled' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'classnum' ],
+                            table      => 'part_svc_class',
+                          },
+                        ],
     },
 
     'part_svc_column' => {
@@ -2170,9 +3235,14 @@ sub tables_hashref {
         'columnvalue', 'varchar', 'NULL',     512, '', '', 
         'columnflag',  'char',    'NULL',       1, '', '', 
       ],
-      'primary_key' => 'columnnum',
-      'unique' => [ [ 'svcpart', 'columnname' ] ],
-      'index' => [ [ 'svcpart' ] ],
+      'primary_key'  => 'columnnum',
+      'unique'       => [ [ 'svcpart', 'columnname' ] ],
+      'index'        => [ [ 'svcpart' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'svcpart' ],
+                            table      => 'part_svc',
+                          },
+                        ],
     },
 
     'part_svc_class' => {
@@ -2210,11 +3280,16 @@ sub tables_hashref {
         'npa',       'char',    '',     3, '', '', 
         'nxx',       'char',    '',     3, '', '', 
       ],
-      'primary_key' => 'localnum',
-      'unique' => [],
-      'index' => [ [ 'npa', 'nxx' ], [ 'popnum' ] ],
+      'primary_key'  => 'localnum',
+      'unique'       => [],
+      'index'        => [ [ 'npa', 'nxx' ], [ 'popnum' ] ],
+      'foreign_keys' => [
+                         { columns    => [ 'popnum' ],
+                           table      => 'svc_acct_pop',
+                         },
+                       ],
     },
-    
+
     'qual' => {
       'columns' => [
         'qualnum',  'serial',     '',     '', '', '', 
@@ -2226,12 +3301,27 @@ sub tables_hashref {
         'vendor_qual_id',      'varchar', 'NULL', $char_d, '', '', 
         'status',      'char', '', 1, '', '', 
       ],
-      'primary_key' => 'qualnum',
-      'unique' => [],
-      'index' => [ [ 'locationnum' ], ['custnum'], ['prospectnum'],
-		    ['phonenum'], ['vendor_qual_id'] ],
+      'primary_key'  => 'qualnum',
+      'unique'       => [],
+      'index'        => [ ['locationnum'], ['custnum'], ['prospectnum'],
+		          ['phonenum'], ['vendor_qual_id'],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                          { columns    => [ 'prospectnum' ],
+                            table      => 'prospect_main',
+                          },
+                          { columns    => [ 'locationnum' ],
+                            table      => 'cust_location',
+                          },
+                          { columns    => [ 'exportnum' ],
+                            table      => 'part_export',
+                          },
+                        ],
     },
-    
+
     'qual_option' => {
       'columns' => [
         'optionnum', 'serial', '', '', '', '', 
@@ -2239,9 +3329,14 @@ sub tables_hashref {
         'optionname', 'varchar', '', $char_d, '', '', 
         'optionvalue', 'text', 'NULL', '', '', '', 
       ],
-      'primary_key' => 'optionnum',
-      'unique' => [],
-      'index' => [],
+      'primary_key'  => 'optionnum',
+      'unique'       => [],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'qualnum' ],
+                            table      => 'qual',
+                          },
+                        ],
     },
 
     'svc_acct' => {
@@ -2305,24 +3400,62 @@ sub tables_hashref {
         #XXX RPOP settings
         #
       ],
-      'primary_key' => 'svcnum',
-      #'unique' => [ [ 'username', 'domsvc' ] ],
-      'unique' => [],
-      'index' => [ ['username'], ['domsvc'], ['pbxsvc'] ],
+      'primary_key'  => 'svcnum',
+      #'unique'       => [ [ 'username', 'domsvc' ] ],
+      'unique'       => [],
+      'index'        => [ ['username'], ['domsvc'], ['pbxsvc'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                          { columns    => [ 'popnum' ],
+                            table      => 'svc_acct_pop',
+                          },
+                          { columns    => [ 'sectornum' ],
+                            table      => 'tower_sector',
+                          },
+                          { columns    => [ 'routernum' ],
+                            table      => 'router',
+                          },
+                          { columns    => [ 'blocknum' ],
+                            table      => 'addr_block',
+                          },
+                          { columns    => [ 'domsvc' ],
+                            table      => 'svc_domain', #'cust_svc',
+                            references => [ 'svcnum' ],
+                          },
+                          { columns    => [ 'pbxsvc' ],
+                            table      => 'svc_pbx', #'cust_svc',
+                            references => [ 'svcnum' ],
+                          },
+                        ],
     },
 
     'acct_rt_transaction' => {
       'columns' => [
-        'svcrtid',   'int',    '',   '', '', '', 
+        'svcrtid',   'int',    '',   '', '', '', #why am i not a serial
         'svcnum',    'int',    '',   '', '', '', 
         'transaction_id',       'int', '',   '', '', '', 
         '_date',   @date_type, '', '',
         'seconds',   'int', '',   '', '', '', #uhhhh
         'support',   'int', '',   '', '', '',
       ],
-      'primary_key' => 'svcrtid',
-      'unique' => [],
-      'index' => [ ['svcnum', 'transaction_id'] ],
+      'primary_key'  => 'svcrtid',
+      'unique'       => [],
+      'index'        => [ ['svcnum', 'transaction_id'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'svc_acct', #'cust_svc',
+                          },
+                          # 1. RT tables aren't part of our data structure, so
+                          #     we can't make sure Queue is created already
+                          # 2. This is our internal hack for time tracking, not
+                          #     a user-facing feature
+                          #{ columns    => [ 'transaction_id' ],
+                          #  table      => 'Transaction',
+                          #  references => [ 'id' ],
+                          #},
+                        ],
     },
 
     #'svc_charge' => {
@@ -2377,11 +3510,27 @@ sub tables_hashref {
         'acct_def_cgp_prontoskinname', 'varchar', 'NULL', $char_d,  '', '',
         'acct_def_cgp_sendmdnmode',    'varchar', 'NULL', $char_d,  '', '',
       ],
-      'primary_key' => 'svcnum',
-      'unique' => [ ],
-      'index' => [ ['domain'] ],
+      'primary_key'  => 'svcnum',
+      'unique'       => [],
+      'index'        => [ ['domain'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                          { columns    => [ 'catchall' ],
+                            table      => 'svc_acct',
+                            references => [ 'svcnum' ],
+                          },
+                          { columns    => [ 'parent_svcnum' ],
+                            table      => 'cust_svc',
+                            references => [ 'svcnum' ],
+                          },
+                          { columns    => [ 'registrarnum' ],
+                            table      => 'registrar',
+                          },
+                        ],
     },
-    
+
     'svc_dsl' => {
       'columns' => [
         'svcnum',                    'int',    '',        '', '', '',
@@ -2411,9 +3560,14 @@ sub tables_hashref {
         'monitored',                'char', 'NULL',       1, '', '', 
         'last_pull',                 'int', 'NULL',      '', '', '',
       ],
-      'primary_key' => 'svcnum',
-      'unique' => [ ],
-      'index' => [ ['phonenum'], ['vendor_order_id'] ],
+      'primary_key'  => 'svcnum',
+      'unique'       => [ ],
+      'index'        => [ ['phonenum'], ['vendor_order_id'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                        ],
     },
 
     'dsl_device' => {
@@ -2424,11 +3578,16 @@ sub tables_hashref {
         'svcnum',       'int',     '', '', '', '', 
         'mac_addr', 'varchar',     '', 12, '', '', 
       ],
-      'primary_key' => 'devicenum',
-      'unique' => [ [ 'mac_addr' ], ],
-      'index'  => [ [ 'svcnum' ], ], # [ 'devicepart' ] ],
+      'primary_key'  => 'devicenum',
+      'unique'       => [ [ 'mac_addr' ], ],
+      'index'        => [ [ 'svcnum' ], ], # [ 'devicepart' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'svc_dsl',
+                          },
+                        ],
     },
-    
+
     'dsl_note' => {
       'columns' => [
         'notenum',           'serial',    '',        '', '', '',
@@ -2438,9 +3597,14 @@ sub tables_hashref {
 	'_date',     'int', 'NULL',       '', '', '',
 	'note',     'text', '',       '', '', '',
       ],
-      'primary_key' => 'notenum',
-      'unique' => [ ],
-      'index' => [ ['svcnum'] ],
+      'primary_key'  => 'notenum',
+      'unique'       => [],
+      'index'        => [ ['svcnum'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'svc_dsl',
+                          },
+                        ],
     },
 
     'svc_dish' => {
@@ -2450,9 +3614,14 @@ sub tables_hashref {
         'installdate', @date_type,         '', '', 
         'note',     'text',    'NULL', '', '', '',
       ],
-      'primary_key' => 'svcnum',
-      'unique' => [ ],
-      'index' => [ ],
+      'primary_key'  => 'svcnum',
+      'unique'       => [],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                        ],
     },
 
     'svc_hardware' => {
@@ -2466,9 +3635,20 @@ sub tables_hashref {
         'statusnum','int',     'NULL',      '', '', '',
         'note',     'text',    'NULL',      '', '', '',
       ],
-      'primary_key' => 'svcnum',
-      'unique' => [ ],
-      'index' => [ ],
+      'primary_key'  => 'svcnum',
+      'unique'       => [],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                          { columns    => [ 'typenum' ],
+                            table      => 'hardware_type',
+                          },
+                          { columns    => [ 'statusnum' ],
+                            table      => 'hardware_status',
+                          },
+                        ],
     },
 
     'hardware_class' => {
@@ -2488,9 +3668,14 @@ sub tables_hashref {
         'model',   'varchar',     '', $char_d, '', '',
         'revision','varchar', 'NULL', $char_d, '', '',
       ],
-      'primary_key' => 'typenum',
-      'unique' => [ [ 'classnum', 'model', 'revision' ] ],
-      'index'  => [ ],
+      'primary_key'  => 'typenum',
+      'unique'       => [ [ 'classnum', 'model', 'revision' ] ],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'classnum' ],
+                            table      => 'hardware_class',
+                          },
+                        ],
     },
 
     'hardware_status' => {
@@ -2514,9 +3699,14 @@ sub tables_hashref {
         'recdata',   'varchar', '',  255, '', '', 
         'ttl',       'int',     'NULL', '', '', '',
       ],
-      'primary_key' => 'recnum',
-      'unique'      => [],
-      'index'       => [ ['svcnum'] ],
+      'primary_key'  => 'recnum',
+      'unique'       => [],
+      'index'        => [ ['svcnum'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'svc_domain',
+                          },
+                        ],
     },
 
     'registrar' => {
@@ -2540,6 +3730,11 @@ sub tables_hashref {
       'primary_key' => 'rulenum',
       'unique'      => [ [ 'svcnum', 'name' ] ],
       'index'       => [ [ 'svcnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc', #svc_acct / svc_domain
+                          },
+                        ],
     },
 
     'cgp_rule_condition' => {
@@ -2550,9 +3745,14 @@ sub tables_hashref {
         'params',           'varchar', 'NULL',     255, '', '',
         'rulenum',              'int',     '',      '', '', '',
       ],
-      'primary_key' => 'ruleconditionnum',
-      'unique'      => [],
-      'index'       => [ [ 'rulenum' ] ],
+      'primary_key'  => 'ruleconditionnum',
+      'unique'       => [],
+      'index'        => [ [ 'rulenum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'rulenum' ],
+                            table      => 'cgp_rule',
+                          },
+                        ],
     },
 
     'cgp_rule_action' => {
@@ -2562,9 +3762,14 @@ sub tables_hashref {
         'params',        'varchar', 'NULL',     255, '', '',
         'rulenum',           'int',     '',      '', '', '',
       ],
-      'primary_key' => 'ruleactionnum',
-      'unique'      => [],
-      'index'       => [ [ 'rulenum' ] ],
+      'primary_key'  => 'ruleactionnum',
+      'unique'       => [],
+      'index'        => [ [ 'rulenum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'rulenum' ],
+                            table      => 'cgp_rule',
+                          },
+                        ],
    },
 
     'svc_forward' => {
@@ -2575,9 +3780,22 @@ sub tables_hashref {
         'dstsvc',   'int',        'NULL',   '', '', '', 
         'dst',      'varchar',    'NULL',  255, '', '', 
       ],
-      'primary_key' => 'svcnum',
-      'unique'      => [],
-      'index'       => [ ['srcsvc'], ['dstsvc'] ],
+      'primary_key'  => 'svcnum',
+      'unique'       => [],
+      'index'        => [ ['srcsvc'], ['dstsvc'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                          { columns    => [ 'srcsvc' ],
+                            table      => 'svc_acct',
+                            references => [ 'svcnum' ]
+                          },
+                          { columns    => [ 'dstsvc' ],
+                            table      => 'svc_acct',
+                            references => [ 'svcnum' ]
+                          },
+                        ],
     },
 
     'svc_www' => {
@@ -2590,6 +3808,18 @@ sub tables_hashref {
       'primary_key' => 'svcnum',
       'unique'      => [],
       'index'       => [],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                          { columns    => [ 'recnum' ],
+                            table      => 'domain_record',
+                          },
+                          { columns    => [ 'usersvc' ],
+                            table      => 'svc_acct',
+                            references => [ 'svcnum' ]
+                          },
+                        ],
     },
 
     #'svc_wo' => {
@@ -2616,9 +3846,14 @@ sub tables_hashref {
         'totalbytes',  'bigint',     'NULL', '', '', '', 
         'agentnum',    'int',     'NULL', '', '', '', 
       ],
-      'primary_key' => 'prepaynum',
-      'unique'      => [ ['identifier'] ],
-      'index'       => [],
+      'primary_key'  => 'prepaynum',
+      'unique'       => [ ['identifier'] ],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                        ],
     },
 
     'port' => {
@@ -2628,9 +3863,14 @@ sub tables_hashref {
         'nasport',  'int',     'NULL', '', '', '', 
         'nasnum',   'int',     '',   '', '', '', 
       ],
-      'primary_key' => 'portnum',
-      'unique'      => [],
-      'index'       => [],
+      'primary_key'  => 'portnum',
+      'unique'       => [],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'nasnum' ],
+                            table      => 'nas',
+                          },
+                        ],
     },
 
     'nas' => {
@@ -2646,9 +3886,14 @@ sub tables_hashref {
         'description', 'varchar',     '', 200, 'RADIUS Client', '',
         'svcnum',          'int', 'NULL',  '',              '', '',
       ],
-      'primary_key' => 'nasnum',
-      'unique'      => [ [ 'nasname' ], ],
-      'index'       => [],
+      'primary_key'  => 'nasnum',
+      'unique'       => [ [ 'nasname' ], ],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'svc_broadband',
+                          },
+                        ],
     },
 
     'export_nas' => {
@@ -2657,14 +3902,22 @@ sub tables_hashref {
         'exportnum',       'int', '', '', '', '', 
         'nasnum',          'int', '', '', '', '', 
       ],
-      'primary_key' => 'exportnasnum',
-      'unique'      => [ [ 'exportnum', 'nasnum' ] ],
-      'index'       => [ [ 'exportnum' ], [ 'nasnum' ] ],
+      'primary_key'  => 'exportnasnum',
+      'unique'       => [ [ 'exportnum', 'nasnum' ] ],
+      'index'        => [ [ 'exportnum' ], [ 'nasnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'exportnum' ],
+                            table      => 'part_export',
+                          },
+                          { columns    => [ 'nasnum' ],
+                            table      => 'nas',
+                          },
+                        ],
     },
 
     'queue' => {
       'columns' => [
-        'jobnum',      'serial',     '',      '', '', '', 
+        'jobnum',   'bigserial',     '',      '', '', '', 
         'job',        'varchar',     '',     512, '', '', 
         '_date',          'int',     '',      '', '', '', 
         'status',     'varchar',     '', $char_d, '', '', 
@@ -2674,34 +3927,58 @@ sub tables_hashref {
         'secure',        'char', 'NULL',       1, '', '',
         'priority',       'int', 'NULL',      '', '', '',
       ],
-      'primary_key' => 'jobnum',
-      'unique'      => [],
-      'index'       => [ [ 'secure' ], [ 'priority' ],
-                         [ 'job' ], [ 'svcnum' ], [ 'custnum' ], [ 'status' ],
-                       ],
+      'primary_key'  => 'jobnum',
+      'unique'       => [],
+      'index'        => [ [ 'secure' ], [ 'priority' ],
+                          [ 'job' ], [ 'svcnum' ], [ 'custnum' ], [ 'status' ],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                        ],
     },
 
     'queue_arg' => {
       'columns' => [
-        'argnum', 'serial', '', '', '', '', 
-        'jobnum', 'int', '', '', '', '', 
-        'frozen', 'char', 'NULL',       1, '', '',
-        'arg', 'text', 'NULL', '', '', '', 
+        'argnum', 'bigserial',     '', '', '', '', 
+        'jobnum',    'bigint',     '', '', '', '', 
+        'frozen',      'char', 'NULL',  1, '', '',
+        'arg',         'text', 'NULL', '', '', '', 
       ],
-      'primary_key' => 'argnum',
-      'unique'      => [],
-      'index'       => [ [ 'jobnum' ] ],
+      'primary_key'  => 'argnum',
+      'unique'       => [],
+      'index'        => [ [ 'jobnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'jobnum' ],
+                            table      => 'queue',
+                            on_delete  => 'CASCADE',
+                          },
+                        ],
     },
 
     'queue_depend' => {
       'columns' => [
-        'dependnum', 'serial', '', '', '', '', 
-        'jobnum', 'int', '', '', '', '', 
-        'depend_jobnum', 'int', '', '', '', '', 
+        'dependnum',  'bigserial', '', '', '', '', 
+        'jobnum',        'bigint', '', '', '', '', 
+        'depend_jobnum', 'bigint', '', '', '', '', 
       ],
-      'primary_key' => 'dependnum',
-      'unique'      => [],
-      'index'       => [ [ 'jobnum' ], [ 'depend_jobnum' ] ],
+      'primary_key'  => 'dependnum',
+      'unique'       => [],
+      'index'        => [ [ 'jobnum' ], [ 'depend_jobnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'jobnum' ],
+                            table      => 'queue',
+                          },
+                          { columns    => [ 'depend_jobnum' ],
+                            table      => 'queue',
+                            references => [ 'jobnum' ],
+                            on_delete  => 'CASCADE',
+                          },
+                        ],
     },
 
     'export_svc' => {
@@ -2710,20 +3987,36 @@ sub tables_hashref {
         'exportnum'    => 'int', '', '', '', '', 
         'svcpart'      => 'int', '', '', '', '', 
       ],
-      'primary_key' => 'exportsvcnum',
-      'unique'      => [ [ 'exportnum', 'svcpart' ] ],
-      'index'       => [ [ 'exportnum' ], [ 'svcpart' ] ],
+      'primary_key'  => 'exportsvcnum',
+      'unique'       => [ [ 'exportnum', 'svcpart' ] ],
+      'index'        => [ [ 'exportnum' ], [ 'svcpart' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'exportnum' ],
+                            table      => 'part_export',
+                          },
+                          { columns    => [ 'svcpart' ],
+                            table      => 'part_svc',
+                          },
+                        ],
     },
 
     'export_device' => {
       'columns' => [
         'exportdevicenum' => 'serial', '', '', '', '', 
-        'exportnum'    => 'int', '', '', '', '', 
+        'exportnum'       => 'int', '', '', '', '', 
         'devicepart'      => 'int', '', '', '', '', 
       ],
-      'primary_key' => 'exportdevicenum',
-      'unique'      => [ [ 'exportnum', 'devicepart' ] ],
-      'index'       => [ [ 'exportnum' ], [ 'devicepart' ] ],
+      'primary_key'  => 'exportdevicenum',
+      'unique'       => [ [ 'exportnum', 'devicepart' ] ],
+      'index'        => [ [ 'exportnum' ], [ 'devicepart' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'exportnum' ],
+                            table      => 'part_export',
+                          },
+                          { columns    => [ 'devicepart' ],
+                            table      => 'part_device',
+                          },
+                        ],
     },
 
     'part_export' => {
@@ -2735,9 +4028,15 @@ sub tables_hashref {
         'nodomain',      'char', 'NULL',       1, '', '', 
         'default_machine','int', 'NULL',      '', '', '',
       ],
-      'primary_key' => 'exportnum',
-      'unique'      => [],
-      'index'       => [ [ 'machine' ], [ 'exporttype' ] ],
+      'primary_key'  => 'exportnum',
+      'unique'       => [],
+      'index'        => [ [ 'machine' ], [ 'exporttype' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'default_machine' ],
+                            table      => 'part_export_machine',
+                            references => [ 'machinenum' ]
+                          },
+                        ],
     },
 
     'part_export_option' => {
@@ -2747,23 +4046,36 @@ sub tables_hashref {
         'optionname', 'varchar', '', $char_d, '', '', 
         'optionvalue', 'text', 'NULL', '', '', '', 
       ],
-      'primary_key' => 'optionnum',
-      'unique'      => [],
-      'index'       => [ [ 'exportnum' ], [ 'optionname' ] ],
+      'primary_key'  => 'optionnum',
+      'unique'       => [],
+      'index'        => [ [ 'exportnum' ], [ 'optionname' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'exportnum' ],
+                            table      => 'part_export',
+                          },
+                        ],
     },
 
     'radius_usergroup' => {
       'columns' => [
         'usergroupnum', 'serial', '', '', '', '', 
         'svcnum',       'int', '', '', '', '', 
-        'groupname',    'varchar', 'NULL', $char_d, '', '', 
+        'groupname',    'varchar', 'NULL', $char_d, '', '', #deprecated
         'groupnum',     'int', 'NULL', '', '', '', 
       ],
-      'primary_key' => 'usergroupnum',
-      'unique'      => [],
-      'index'       => [ [ 'svcnum' ], [ 'groupname' ] ],
+      'primary_key'  => 'usergroupnum',
+      'unique'       => [],
+      'index'        => [ [ 'svcnum' ], [ 'groupname' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc', #svc_acct / svc_broadband
+                          },
+                          { columns    => [ 'groupnum' ],
+                            table      => 'radius_group',
+                          },
+                        ],
     },
-    
+
     'radius_group' => {
       'columns' => [
         'groupnum', 'serial', '', '', '', '', 
@@ -2787,9 +4099,14 @@ sub tables_hashref {
         'attrtype',    'char', '',       1, '', '',
         'op',          'char', '',       2, '', '',
       ],
-      'primary_key' => 'attrnum',
-      'unique'      => [],
-      'index'       => [ ['groupnum'], ],
+      'primary_key'  => 'attrnum',
+      'unique'       => [],
+      'index'        => [ ['groupnum'], ],
+      'foreign_keys' => [
+                          { columns    => [ 'groupnum' ],
+                            table      => 'radius_group',
+                          },
+                        ],
     },
 
     'msgcat' => {
@@ -2813,9 +4130,17 @@ sub tables_hashref {
         'month',     'int', '', '', '', '', 
         'amount',   @money_type, '', '', 
       ],
-      'primary_key' => 'exemptnum',
-      'unique'      => [ [ 'custnum', 'taxnum', 'year', 'month' ] ],
-      'index'       => [],
+      'primary_key'  => 'exemptnum',
+      'unique'       => [ [ 'custnum', 'taxnum', 'year', 'month' ] ],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                          { columns    => [ 'taxnum' ],
+                            table      => 'cust_main_county',
+                          },
+                        ],
     },
 
     'cust_tax_exempt_pkg' => {
@@ -2835,13 +4160,24 @@ sub tables_hashref {
         'exempt_cust_taxname',  'char', 'NULL', 1, '', '',
         'exempt_monthly',       'char', 'NULL', 1, '', '',
       ],
-      'primary_key' => 'exemptpkgnum',
-      'unique' => [],
-      'index'  => [ [ 'taxnum', 'year', 'month' ],
-                    [ 'billpkgnum' ],
-                    [ 'taxnum' ],
-                    [ 'creditbillpkgnum' ],
-                  ],
+      'primary_key'  => 'exemptpkgnum',
+      'unique'       => [],
+      'index'        => [ [ 'taxnum', 'year', 'month' ],
+                          [ 'billpkgnum' ],
+                          [ 'taxnum' ],
+                          [ 'creditbillpkgnum' ],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'billpkgnum' ],
+                            table      => 'cust_bill_pkg',
+                          },
+                          { columns    => [ 'taxnum' ],
+                            table      => 'cust_main_county',
+                          },
+                          { columns    => [ 'creditbillpkgnum' ],
+                            table      => 'cust_credit_bill_pkg',
+                          },
+                        ],
     },
 
     'cust_tax_exempt_pkg_void' => {
@@ -2861,13 +4197,24 @@ sub tables_hashref {
         'exempt_cust_taxname',  'char', 'NULL', 1, '', '',
         'exempt_monthly',       'char', 'NULL', 1, '', '',
       ],
-      'primary_key' => 'exemptpkgnum',
-      'unique' => [],
-      'index'  => [ [ 'taxnum', 'year', 'month' ],
-                    [ 'billpkgnum' ],
-                    [ 'taxnum' ],
-                    [ 'creditbillpkgnum' ],
-                  ],
+      'primary_key'  => 'exemptpkgnum',
+      'unique'       => [],
+      'index'        => [ [ 'taxnum', 'year', 'month' ],
+                          [ 'billpkgnum' ],
+                          [ 'taxnum' ],
+                          [ 'creditbillpkgnum' ],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'billpkgnum' ],
+                            table      => 'cust_bill_pkg_void',
+                          },
+                          { columns    => [ 'taxnum' ],
+                            table      => 'cust_main_county',
+                          },
+                          { columns    => [ 'creditbillpkgnum' ],
+                            table      => 'cust_credit_bill_pkg',
+                          },
+                        ],
     },
 
     'router' => {
@@ -2878,9 +4225,17 @@ sub tables_hashref {
         'agentnum',   'int', 'NULL', '', '', '', 
         'manual_addr', 'char', 'NULL', 1, '', '',
       ],
-      'primary_key' => 'routernum',
-      'unique'      => [],
-      'index'       => [],
+      'primary_key'  => 'routernum',
+      'unique'       => [],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc', #svc_acct / svc_broadband
+                          },
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                        ],
     },
 
     'part_svc_router' => {
@@ -2889,9 +4244,17 @@ sub tables_hashref {
         'svcpart', 'int', '', '', '', '', 
 	'routernum', 'int', '', '', '', '', 
       ],
-      'primary_key' => 'svcrouternum',
-      'unique'      => [],
-      'index'       => [],
+      'primary_key'  => 'svcrouternum',
+      'unique'       => [],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'svcpart' ],
+                            table      => 'part_svc',
+                          },
+                          { columns    => [ 'routernum' ],
+                            table      => 'router',
+                          },
+                        ],
     },
 
     'addr_block' => {
@@ -2903,9 +4266,17 @@ sub tables_hashref {
         'agentnum',   'int', 'NULL', '', '', '', 
         'manual_flag', 'char', 'NULL', 1, '', '', 
       ],
-      'primary_key' => 'blocknum',
-      'unique'      => [ [ 'blocknum', 'routernum' ] ],
-      'index'       => [],
+      'primary_key'  => 'blocknum',
+      'unique'       => [ [ 'blocknum', 'routernum' ] ],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'routernum' ],
+                            table      => 'router',
+                          },
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                        ],
     },
 
     'svc_broadband' => {
@@ -2933,21 +4304,42 @@ sub tables_hashref {
         'suid',                    'int', 'NULL',        '', '', '',
         'shared_svcnum',           'int', 'NULL',        '', '', '',
       ],
-      'primary_key' => 'svcnum',
-      'unique'      => [ [ 'ip_addr' ], [ 'mac_addr' ] ],
-      'index'       => [],
+      'primary_key'  => 'svcnum',
+      'unique'       => [ [ 'ip_addr' ], [ 'mac_addr' ] ],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                          { columns    => [ 'routernum' ],
+                            table      => 'router',
+                          },
+                          { columns    => [ 'blocknum' ],
+                            table      => 'addr_block',
+                          },
+                          { columns    => [ 'sectornum' ],
+                            table      => 'tower_sector',
+                          },
+                          { columns    => [ 'shared_svcnum' ],
+                            table      => 'svc_broadband',
+                            references => [ 'svcnum' ],
+                          },
+                        ],
     },
 
     'tower' => {
       'columns' => [
-        'towernum',   'serial',     '',      '', '', '',
-        #'agentnum',      'int', 'NULL',      '', '', '',
-        'towername', 'varchar',     '', $char_d, '', '',
-        'disabled',     'char', 'NULL',       1, '', '',
-        'latitude', 'decimal', 'NULL',   '10,7', '', '', 
-        'longitude','decimal', 'NULL',   '10,7', '', '', 
-        'altitude', 'decimal', 'NULL',       '', '', '', 
-        'coord_auto',  'char', 'NULL',        1, '', '',
+        'towernum',    'serial',     '',      '', '', '',
+        #'agentnum',       'int', 'NULL',      '', '', '',
+        'towername',  'varchar',     '', $char_d, '', '',
+        'disabled',      'char', 'NULL',       1, '', '',
+        'latitude',   'decimal', 'NULL',  '10,7', '', '', 
+        'longitude',  'decimal', 'NULL',  '10,7', '', '', 
+        'coord_auto',    'char', 'NULL',       1, '', '',
+        'altitude',   'decimal', 'NULL',      '', '', '', 
+        'height',     'decimal', 'NULL',      '', '', '', 
+        'veg_height', 'decimal', 'NULL',      '', '', '', 
+        'color',      'varchar', 'NULL',       6, '', '',
       ],
       'primary_key' => 'towernum',
       'unique'      => [ [ 'towername' ] ], # , 'agentnum' ] ],
@@ -2960,10 +4352,21 @@ sub tables_hashref {
         'towernum',       'int',     '',      '', '', '',
         'sectorname', 'varchar',     '', $char_d, '', '',
         'ip_addr',    'varchar', 'NULL',      15, '', '',
+        'height',     'decimal', 'NULL',      '', '', '', 
+        'freq_mhz',       'int', 'NULL',      '', '', '',
+        'direction',      'int', 'NULL',      '', '', '',
+        'width',          'int', 'NULL',      '', '', '',
+        #downtilt etc? rfpath has profile files for devices/antennas you upload?
+        'range',      'decimal', 'NULL',      '', '', '',  #?
       ],
-      'primary_key' => 'sectornum',
-      'unique'      => [ [ 'towernum', 'sectorname' ], [ 'ip_addr' ], ],
-      'index'       => [ [ 'towernum' ] ],
+      'primary_key'  => 'sectornum',
+      'unique'       => [ [ 'towernum', 'sectorname' ], [ 'ip_addr' ], ],
+      'index'        => [ [ 'towernum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'towernum' ],
+                            table      => 'tower',
+                          },
+                        ],
     },
 
     'part_virtual_field' => {
@@ -2986,9 +4389,14 @@ sub tables_hashref {
         'vfieldpart', 'int', '', '', '', '', 
         'value', 'varchar', '', 128, '', '', 
       ],
-      'primary_key' => 'vfieldnum',
-      'unique' => [ [ 'vfieldpart', 'recnum' ] ],
-      'index' => [],
+      'primary_key'  => 'vfieldnum',
+      'unique'       => [ [ 'vfieldpart', 'recnum' ] ],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'vfieldpart' ],
+                            table      => 'part_virtual_field',
+                          },
+                        ],
     },
 
     'acct_snarf' => {
@@ -3006,9 +4414,14 @@ sub tables_hashref {
         'tls',           'char', 'NULL',       1, '', '', 
         'mailbox',    'varchar', 'NULL', $char_d, '', '', 
       ],
-      'primary_key' => 'snarfnum',
-      'unique' => [],
-      'index'  => [ [ 'svcnum' ] ],
+      'primary_key'  => 'snarfnum',
+      'unique'       => [],
+      'index'        => [ [ 'svcnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'svc_acct',
+                          },
+                        ],
     },
 
     'svc_external' => {
@@ -3017,9 +4430,14 @@ sub tables_hashref {
         'id',      'bigint', 'NULL',      '', '', '', 
         'title',  'varchar', 'NULL', $char_d, '', '', 
       ],
-      'primary_key' => 'svcnum',
-      'unique'      => [],
-      'index'       => [],
+      'primary_key'  => 'svcnum',
+      'unique'       => [],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                        ],
     },
 
     'cust_pay_refund' => {
@@ -3030,9 +4448,17 @@ sub tables_hashref {
         '_date',    @date_type, '', '', 
         'amount',   @money_type, '', '', 
       ],
-      'primary_key' => 'payrefundnum',
-      'unique' => [],
-      'index' => [ ['paynum'], ['refundnum'] ],
+      'primary_key'  => 'payrefundnum',
+      'unique'       => [],
+      'index'        => [ ['paynum'], ['refundnum'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'paynum' ],
+                            table      => 'cust_pay',
+                          },
+                          { columns    => [ 'refundnum' ],
+                            table      => 'cust_refund',
+                          },
+                        ],
     },
 
     'part_pkg_option' => {
@@ -3042,9 +4468,14 @@ sub tables_hashref {
         'optionname', 'varchar', '', $char_d, '', '', 
         'optionvalue', 'text', 'NULL', '', '', '', 
       ],
-      'primary_key' => 'optionnum',
-      'unique'      => [],
-      'index'       => [ [ 'pkgpart' ], [ 'optionname' ] ],
+      'primary_key'  => 'optionnum',
+      'unique'       => [],
+      'index'        => [ [ 'pkgpart' ], [ 'optionname' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'pkgpart' ],
+                            table      => 'part_pkg',
+                          },
+                        ],
     },
 
     'part_pkg_vendor' => {
@@ -3054,11 +4485,19 @@ sub tables_hashref {
         'exportnum', 'int', '', '', '', '', 
         'vendor_pkg_id', 'varchar', '', $char_d, '', '', 
       ],
-      'primary_key' => 'num',
-      'unique' => [ [ 'pkgpart', 'exportnum' ] ],
-      'index'       => [ [ 'pkgpart' ] ],
+      'primary_key'  => 'num',
+      'unique'       => [ [ 'pkgpart', 'exportnum' ] ],
+      'index'        => [ [ 'pkgpart' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'pkgpart' ],
+                            table      => 'part_pkg',
+                          },
+                          { columns    => [ 'exportnum' ],
+                            table      => 'part_export',
+                          },
+                        ],
     },
-    
+
     'part_pkg_report_option' => {
       'columns' => [
         'num',      'serial',   '',      '', '', '', 
@@ -3080,9 +4519,14 @@ sub tables_hashref {
         'rollover', 'char', 'NULL',  1, '', '',
         'description',  'varchar', 'NULL', $char_d, '', '',
       ],
-      'primary_key' => 'pkgusagepart',
-      'unique'      => [],
-      'index'       => [ [ 'pkgpart' ] ],
+      'primary_key'  => 'pkgusagepart',
+      'unique'       => [],
+      'index'        => [ [ 'pkgpart' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'pkgpart' ],
+                            table      => 'part_pkg',
+                          },
+                        ],
     },
 
     'part_pkg_usage_class' => {
@@ -3091,9 +4535,17 @@ sub tables_hashref {
         'pkgusagepart', 'int',  '', '', '', '',
         'classnum',     'int','NULL', '', '', '',
       ],
-      'primary_key' => 'num',
-      'unique'      => [ [ 'pkgusagepart', 'classnum' ] ],
-      'index'       => [],
+      'primary_key'  => 'num',
+      'unique'       => [ [ 'pkgusagepart', 'classnum' ] ],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'pkgusagepart' ],
+                            table      => 'part_pkg_usage',
+                          },
+                          { columns    => [ 'classnum' ],
+                            table      => 'usage_class',
+                          },
+                        ],
     },
 
     'rate' => {
@@ -3122,11 +4574,33 @@ sub tables_hashref {
         'cdrtypenum',      'int', 'NULL',     '',       '', '',
         'region_group', 'char', 'NULL',        1,       '', '', 
       ],
-      'primary_key' => 'ratedetailnum',
-      'unique'      => [ [ 'ratenum', 'orig_regionnum', 'dest_regionnum' ] ],
-      'index'       => [ [ 'ratenum', 'dest_regionnum' ],
-                         [ 'ratenum', 'ratetimenum' ]
-                       ],
+      'primary_key'  => 'ratedetailnum',
+      'unique'       => [ [ 'ratenum', 'orig_regionnum', 'dest_regionnum' ] ],
+      'index'        => [ [ 'ratenum', 'dest_regionnum' ],
+                          [ 'ratenum', 'ratetimenum' ]
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'ratenum' ],
+                            table      => 'rate',
+                          },
+                          { columns    => [ 'orig_regionnum' ],
+                            table      => 'rate_region',
+                            references => [ 'regionnum' ],
+                          },
+                          { columns    => [ 'dest_regionnum' ],
+                            table      => 'rate_region',
+                            references => [ 'regionnum' ],
+                          },
+                          { columns    => [ 'ratetimenum' ],
+                            table      => 'rate_time',
+                          },
+                          { columns    => [ 'classnum' ],
+                            table      => 'usage_class',
+                          },
+                          { columns    => [ 'cdrtypenum' ],
+                            table      => 'cdr_type',
+                          },
+                        ],
     },
 
     'rate_region' => {
@@ -3151,9 +4625,17 @@ sub tables_hashref {
         'state',       'char',    'NULL',       2, '', '', 
         'ocn',         'char',    'NULL',       4, '', '', 
       ],
-      'primary_key' => 'prefixnum',
-      'unique'      => [],
-      'index'       => [ [ 'countrycode' ], [ 'npa' ], [ 'regionnum' ] ],
+      'primary_key'  => 'prefixnum',
+      'unique'       => [],
+      'index'        => [ [ 'countrycode' ], [ 'npa' ], [ 'regionnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'regionnum' ],
+                            table      => 'rate_region',
+                          },
+                          { columns    => [ 'latanum' ],
+                            table      => 'lata',
+                          },
+                        ],
     },
 
     'rate_time' => {
@@ -3173,10 +4655,15 @@ sub tables_hashref {
         'etime',          'int', '', '', '', '',
         'ratetimenum',    'int', '', '', '', '',
       ],
-      'primary_key' => 'intervalnum',
-      'unique'      => [],
-      'index'       => [],
-    },
+      'primary_key'  => 'intervalnum',
+      'unique'       => [],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'ratetimenum' ],
+                            table      => 'rate_time',
+                          },
+                        ],
+     },
 
     #not really part of the above rate_ stuff (used with flat rate rather than
     # rated billing), but could be eventually, and its a rate
@@ -3197,9 +4684,14 @@ sub tables_hashref {
         'min_quan',         'int', '',     '', '', '',
         'min_charge',   'decimal', '', '10,4', '', '',
       ],
-      'primary_key' => 'tierdetailnum',
-      'unique'      => [],
-      'index'       => [ ['tiernum'], ],
+      'primary_key'  => 'tierdetailnum',
+      'unique'       => [],
+      'index'        => [ ['tiernum'], ],
+      'foreign_keys' => [
+                          { columns    => [ 'tiernum' ],
+                            table      => 'rate_tier',
+                          },
+                        ],
     },
 
     'usage_class' => {
@@ -3221,10 +4713,15 @@ sub tables_hashref {
         'code',      'varchar',   '', $char_d, '', '', 
         'agentnum',  'int',       '', '', '', '', 
       ],
-      'primary_key' => 'codenum',
-      'unique'      => [ [ 'agentnum', 'code' ] ],
-      'index'       => [ [ 'agentnum' ] ],
-    },
+      'primary_key'  => 'codenum',
+      'unique'       => [ [ 'agentnum', 'code' ] ],
+      'index'        => [ [ 'agentnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                        ],
+     },
 
     'reg_code_pkg' => {
       'columns' => [
@@ -3232,9 +4729,17 @@ sub tables_hashref {
         'codenum',   'int',    '', '', '', '', 
         'pkgpart',   'int',    '', '', '', '', 
       ],
-      'primary_key' => 'codepkgnum',
-      'unique'      => [ [ 'codenum', 'pkgpart' ] ],
-      'index'       => [ [ 'codenum' ] ],
+      'primary_key'  => 'codepkgnum',
+      'unique'       => [ [ 'codenum', 'pkgpart' ] ],
+      'index'        => [ [ 'codenum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'codenum' ],
+                            table      => 'reg_code',
+                          },
+                          { columns    => [ 'pkgpart' ],
+                            table      => 'part_pkg',
+                          },
+                        ],
     },
 
     'clientapi_session' => {
@@ -3255,9 +4760,14 @@ sub tables_hashref {
         'fieldname',  'varchar',     '', $char_d, '', '', 
         'fieldvalue',    'text', 'NULL', '', '', '', 
       ],
-      'primary_key' => 'fieldnum',
-      'unique'      => [ [ 'sessionnum', 'fieldname' ] ],
-      'index'       => [],
+      'primary_key'  => 'fieldnum',
+      'unique'       => [ [ 'sessionnum', 'fieldname' ] ],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'sessionnum' ],
+                            table      => 'clientapi_session',
+                          },
+                        ],
     },
 
     'payment_gateway' => {
@@ -3284,9 +4794,14 @@ sub tables_hashref {
         'optionname',  'varchar', '',     $char_d, '', '', 
         'optionvalue', 'text',    'NULL', '', '', '', 
       ],
-      'primary_key' => 'optionnum',
-      'unique'      => [],
-      'index'       => [ [ 'gatewaynum' ], [ 'optionname' ] ],
+      'primary_key'  => 'optionnum',
+      'unique'       => [],
+      'index'        => [ [ 'gatewaynum' ], [ 'optionname' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'gatewaynum' ],
+                            table      => 'payment_gateway',
+                          },
+                        ],
     },
 
     'agent_payment_gateway' => {
@@ -3297,9 +4812,19 @@ sub tables_hashref {
         'cardtype',        'varchar', 'NULL', $char_d, '', '', 
         'taxclass',        'varchar', 'NULL', $char_d, '', '', 
       ],
-      'primary_key' => 'agentgatewaynum',
-      'unique'      => [],
-      'index'       => [ [ 'agentnum', 'cardtype' ], ],
+      'primary_key'  => 'agentgatewaynum',
+      'unique'       => [],
+      'index'        => [ [ 'agentnum', 'cardtype' ], ],
+
+      'foreign_keys' => [
+
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                          { columns    => [ 'gatewaynum' ],
+                            table      => 'payment_gateway',
+                          },
+                        ],
     },
 
     'banned_pay' => {
@@ -3315,9 +4840,14 @@ sub tables_hashref {
         'bantype', 'varchar',  'NULL', $char_d, '', '',
         'reason',  'varchar',  'NULL', $char_d, '', '', 
       ],
-      'primary_key' => 'bannum',
-      'unique'      => [],
-      'index'       => [ [ 'payby', 'payinfo' ], [ 'usernum' ], ],
+      'primary_key'  => 'bannum',
+      'unique'       => [],
+      'index'        => [ [ 'payby', 'payinfo' ], [ 'usernum' ], ],
+      'foreign_keys' => [
+                          { columns    => [ 'usernum' ],
+                            table      => 'access_user',
+                          },
+                        ],
     },
 
     'pkg_category' => {
@@ -3341,9 +4871,14 @@ sub tables_hashref {
         'disabled',    'char', 'NULL',       1, '', '', 
         'fcc_ds0s',      'int',     'NULL', '', '', '', 
       ],
-      'primary_key' => 'classnum',
-      'unique' => [],
-      'index' => [ ['disabled'] ],
+      'primary_key'  => 'classnum',
+      'unique'       => [],
+      'index'        => [ ['disabled'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'categorynum' ],
+                            table      => 'pkg_category',
+                          },
+                        ],
     },
 
     'cdr' => {
@@ -3369,6 +4904,10 @@ sub tables_hashref {
         #currently only opensips
         'src_ip_addr', 'varchar',  'NULL',  15,    '', '',
         'dst_ip_addr', 'varchar',  'NULL',  15,    '', '',
+
+        #currently only u4:
+        # terminating number (as opposed to dialed destination)
+        'dst_term',    'varchar',  'NULL', $char_d, '', '',
 
         #these don't seem to be logged by most of the SQL cdr_* modules
         #except tds under sql-illegal names, so;
@@ -3421,7 +4960,7 @@ sub tables_hashref {
         ###
         'servicecode',             'int', 'NULL',      '', '', '',
         'quantity_able',           'int', 'NULL',      '', '', '', 
-        
+
         ###
         #and now for our own fields
         ###
@@ -3479,8 +5018,10 @@ sub tables_hashref {
                    [ 'sessionnum' ], [ 'subscriber' ],
                    [ 'freesidestatus' ], [ 'freesiderewritestatus' ],
                    [ 'cdrbatch' ], [ 'cdrbatchnum' ],
-                   [ 'src_ip_addr' ], [ 'dst_ip_addr' ],
+                   [ 'src_ip_addr' ], [ 'dst_ip_addr' ], [ 'dst_term' ],
                  ],
+      #no FKs on cdr table... choosing not to throw errors no matter what's
+      # thrown in here.  better to have the data.
     },
 
     'cdr_batch' => {
@@ -3505,9 +5046,17 @@ sub tables_hashref {
         'status',       'varchar', 'NULL',      32, '', '',
         'svcnum',           'int', 'NULL',      '', '', '',
       ],
-      'primary_key' => 'cdrtermnum',
-      'unique'      => [ [ 'acctid', 'termpart' ] ],
-      'index'       => [ [ 'acctid' ], [ 'status' ], ],
+      'primary_key'  => 'cdrtermnum',
+      'unique'       => [ [ 'acctid', 'termpart' ] ],
+      'index'        => [ [ 'acctid' ], [ 'status' ], ],
+      'foreign_keys' => [
+                          { columns    => [ 'acctid' ],
+                            table      => 'cdr',
+                          },
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                        ],
     },
 
     #to handle multiple termination/settlement passes...
@@ -3545,8 +5094,9 @@ sub tables_hashref {
 
     'cdr_carrier' => {
       'columns' => [
-        'carrierid'   => 'serial',  '', '', '', '',
-        'carriername' => 'varchar', '', $char_d, '', '',
+        'carrierid'   =>  'serial',     '',      '', '', '',
+        'carriername' => 'varchar',     '', $char_d, '', '',
+        'disabled'    =>    'char', 'NULL',       1, '', '', 
       ],
       'primary_key' => 'carrierid',
       'unique'      => [],
@@ -3577,9 +5127,20 @@ sub tables_hashref {
         'svcnum',    'int',     'NULL',      '', '', '',
         'svc_field', 'varchar', 'NULL', $char_d, '', '',
       ],
-      'primary_key' => 'itemnum',
-      'unique' => [ [ 'classnum', 'item' ] ],
-      'index'  => [ [ 'classnum' ], [ 'agentnum' ], [ 'svcnum' ] ],
+      'primary_key'  => 'itemnum',
+      'unique'       => [ [ 'classnum', 'item' ] ],
+      'index'        => [ [ 'classnum' ], [ 'agentnum' ], [ 'svcnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'classnum' ],
+                            table      => 'inventory_class',
+                          },
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                        ],
     },
 
     'inventory_class' => {
@@ -3600,9 +5161,14 @@ sub tables_hashref {
         'start_date', @date_type,               '', '',
         'last_date',  @date_type,               '', '',
       ],
-      'primary_key' => 'sessionnum',
-      'unique' => [ [ 'sessionkey' ] ],
-      'index'  => [],
+      'primary_key'  => 'sessionnum',
+      'unique'       => [ [ 'sessionkey' ] ],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'usernum' ],
+                            table      => 'access_user',
+                          },
+                        ],
     },
 
     'access_user' => {
@@ -3614,11 +5180,22 @@ sub tables_hashref {
         'last',               'varchar', 'NULL', $char_d, '', '', 
         'first',              'varchar', 'NULL', $char_d, '', '', 
         'user_custnum',           'int', 'NULL',      '', '', '',
+        'report_salesnum',        'int', 'NULL',      '', '', '',
         'disabled',              'char', 'NULL',       1, '', '', 
       ],
-      'primary_key' => 'usernum',
-      'unique' => [ [ 'username' ] ],
-      'index'  => [ [ 'user_custnum' ] ],
+      'primary_key'  => 'usernum',
+      'unique'       => [ [ 'username' ] ],
+      'index'        => [ [ 'user_custnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'user_custnum' ],
+                            table      => 'cust_main',
+                            references => [ 'custnum' ],
+                          },
+                          { columns    => [ 'report_salesnum' ],
+                            table      => 'sales',
+                            references => [ 'salesnum' ],
+                          },
+                        ],
     },
 
     'access_user_pref' => {
@@ -3629,9 +5206,14 @@ sub tables_hashref {
         'prefvalue', 'text', 'NULL', '', '', '', 
         'expiration', @date_type, '', '',
       ],
-      'primary_key' => 'prefnum',
-      'unique' => [],
-      'index'  => [ [ 'usernum' ] ],
+      'primary_key'  => 'prefnum',
+      'unique'       => [],
+      'index'        => [ [ 'usernum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'usernum' ],
+                            table      => 'access_user',
+                          },
+                        ],
     },
 
     'access_group' => {
@@ -3650,10 +5232,18 @@ sub tables_hashref {
         'usernum',         'int', '', '', '', '',
         'groupnum',        'int', '', '', '', '',
       ],
-      'primary_key' => 'usergroupnum',
-      'unique' => [ [ 'usernum', 'groupnum' ] ],
-      'index'  => [ [ 'usernum' ] ],
-    },
+      'primary_key'  => 'usergroupnum',
+      'unique'       => [ [ 'usernum', 'groupnum' ] ],
+      'index'        => [ [ 'usernum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'usernum' ],
+                            table      => 'access_user',
+                          },
+                          { columns    => [ 'groupnum' ],
+                            table      => 'access_group',
+                          },
+                        ],
+     },
 
     'access_groupagent' => {
       'columns' => [
@@ -3661,20 +5251,17 @@ sub tables_hashref {
         'groupnum',         'int', '', '', '', '',
         'agentnum',         'int', '', '', '', '',
       ],
-      'primary_key' => 'groupagentnum',
-      'unique' => [ [ 'groupnum', 'agentnum' ] ],
-      'index'  => [ [ 'groupnum' ] ],
-    },
-
-    'access_groupsales' => {
-      'columns' => [
-        'groupsalesnum', 'serial', '', '', '', '',
-        'groupnum',         'int', '', '', '', '',
-        'salesnum',         'int', '', '', '', '',
-      ],
-      'primary_key' => 'groupsalesnum',
-      'unique' => [ [ 'groupnum', 'salesnum' ] ],
-      'index'  => [ [ 'groupnum' ] ],
+      'primary_key'  => 'groupagentnum',
+      'unique'       => [ [ 'groupnum', 'agentnum' ] ],
+      'index'        => [ [ 'groupnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'groupnum' ],
+                            table      => 'access_group',
+                          },
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                        ],
     },
 
     'access_right' => {
@@ -3691,32 +5278,55 @@ sub tables_hashref {
 
     'svc_phone' => {
       'columns' => [
-        'svcnum',       'int',         '',      '', '', '', 
-        'countrycode',  'varchar',     '',       3, '', '', 
-        'phonenum',     'varchar',     '',      25, '', '',  #12 ?
-        'sim_imsi',     'varchar', 'NULL',      15, '', '',
-        'pin',          'varchar', 'NULL', $char_d, '', '',
-        'sip_password', 'varchar', 'NULL', $char_d, '', '',
-        'phone_name',   'varchar', 'NULL', $char_d, '', '',
-        'pbxsvc',           'int', 'NULL',      '', '', '',
-        'domsvc',           'int', 'NULL',      '', '', '', 
-        'locationnum',      'int', 'NULL', '', '', '',
-        'forwarddst',     'varchar',     'NULL',      15, '', '', 
-        'email',           'varchar', 'NULL',  255, '', '', 
-        'lnp_status',   'varchar', 'NULL', $char_d, '', '',
-        'portable',   	'char', 'NULL',       1,  '', '', 
-        'lrn',     'char',     'NULL',      10, '', '', 
-	'lnp_desired_due_date',     'int', 'NULL',       '', '', '',
-	'lnp_due_date',     'int', 'NULL',       '', '', '',
-        'lnp_other_provider', 'varchar', 'NULL', $char_d,  '', '',
-        'lnp_other_provider_account', 'varchar', 'NULL', $char_d,  '', '',
-        'lnp_reject_reason', 'varchar', 'NULL', $char_d,  '', '',
+        'svcnum',                         'int',     '',      '', '', '', 
+        'countrycode',                'varchar',     '',       3, '', '', 
+        'phonenum',                   'varchar',     '',      25, '', '', #12 ?
+        'sim_imsi',                   'varchar', 'NULL',      15, '', '',
+        'pin',                        'varchar', 'NULL', $char_d, '', '',
+        'sip_password',               'varchar', 'NULL', $char_d, '', '',
+        'phone_name',                 'varchar', 'NULL', $char_d, '', '',
+        'pbxsvc',                         'int', 'NULL',      '', '', '',
+        'domsvc',                         'int', 'NULL',      '', '', '', 
+        'locationnum',                    'int', 'NULL',      '', '', '',
+        'forwarddst',                 'varchar', 'NULL',      15, '', '', 
+        'email',                      'varchar', 'NULL',     255, '', '', 
+        'lnp_status',                 'varchar', 'NULL', $char_d, '', '',
+        'portable',                      'char', 'NULL',       1, '', '', 
+        'lrn',                           'char', 'NULL',      10, '', '', 
+        'lnp_desired_due_date',           'int', 'NULL',      '', '', '',
+        'lnp_due_date',                   'int', 'NULL',      '', '', '',
+        'lnp_other_provider',         'varchar', 'NULL', $char_d, '', '',
+        'lnp_other_provider_account', 'varchar', 'NULL', $char_d, '', '',
+        'lnp_reject_reason',          'varchar', 'NULL', $char_d, '', '',
+        'sms_carrierid',                  'int', 'NULL',      '', '', '',
+        'sms_account',                'varchar', 'NULL', $char_d, '', '',
+        'max_simultaneous',               'int', 'NULL',      '', '', '',
       ],
-      'primary_key' => 'svcnum',
-      'unique' => [],
-      'index'  => [ ['countrycode', 'phonenum'], ['pbxsvc'], ['domsvc'],
-                    ['locationnum'],
-                  ],
+      'primary_key'  => 'svcnum',
+      'unique'       => [ [ 'sms_carrierid', 'sms_account'] ],
+      'index'        => [ ['countrycode', 'phonenum'], ['pbxsvc'], ['domsvc'],
+                          ['locationnum'], ['sms_carrierid'],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                          { columns    => [ 'pbxsvc' ],
+                            table      => 'svc_pbx', #'cust_svc',
+                            references => [ 'svcnum' ],
+                          },
+                          { columns    => [ 'domsvc' ],
+                            table      => 'svc_domain', #'cust_svc',
+                            references => [ 'svcnum' ],
+                          },
+                          { columns    => [ 'locationnum' ],
+                            table      => 'cust_location',
+                          },
+                          { columns    => [ 'sms_carrierid' ],
+                            table      => 'cdr_carrier',
+                            references => [ 'carrierid' ],
+                          },
+                        ],
     },
 
     'phone_device' => {
@@ -3726,9 +5336,17 @@ sub tables_hashref {
         'svcnum',       'int',     '', '', '', '', 
         'mac_addr', 'varchar', 'NULL', 12, '', '', 
       ],
-      'primary_key' => 'devicenum',
-      'unique' => [ [ 'mac_addr' ], ],
-      'index'  => [ [ 'devicepart' ], [ 'svcnum' ], ],
+      'primary_key'  => 'devicenum',
+      'unique'       => [ [ 'mac_addr' ], ],
+      'index'        => [ [ 'devicepart' ], [ 'svcnum' ], ],
+      'foreign_keys' => [
+                          { columns    => [ 'devicepart' ],
+                            table      => 'part_device',
+                          },
+                          { columns    => [ 'svcnum' ],
+                            table      => 'svc_phone',
+                          },
+                        ],
     },
 
     'part_device' => {
@@ -3737,9 +5355,15 @@ sub tables_hashref {
         'devicename', 'varchar', '', $char_d, '', '',
         'inventory_classnum', 'int', 'NULL', '', '', '',
       ],
-      'primary_key' => 'devicepart',
-      'unique' => [ [ 'devicename' ] ], #?
-      'index'  => [],
+      'primary_key'  => 'devicepart',
+      'unique'       => [ [ 'devicename' ] ], #?
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'inventory_classnum' ],
+                            table      => 'inventory_class',
+                            references => [ 'classnum' ],
+                          },
+                        ],
     },
 
     'phone_avail' => {
@@ -3759,18 +5383,35 @@ sub tables_hashref {
         'svcnum',      'int',     'NULL',      '', '', '',
         'availbatch', 'varchar',  'NULL', $char_d, '', '',
       ],
-      'primary_key' => 'availnum',
-      'unique' => [],
-      'index'  => [ [ 'exportnum', 'countrycode', 'state' ],     #npa search
-                    [ 'exportnum', 'countrycode', 'npa' ],       #nxx search
-                    [ 'exportnum', 'countrycode', 'npa', 'nxx' ],#station search
-                    [ 'exportnum', 'countrycode', 'npa', 'nxx', 'station' ], # #
-                    [ 'svcnum' ],
-                    [ 'availbatch' ],
-                    [ 'latanum' ],
-                  ],
+      'primary_key'  => 'availnum',
+      'unique'       => [],
+      'index'        => [ ['exportnum','countrycode','state'],    #npa search
+                          ['exportnum','countrycode','npa'],      #nxx search
+                          ['exportnum','countrycode','npa','nxx'],#station srch
+                          [ 'exportnum','countrycode','npa','nxx','station'], #
+                          [ 'svcnum' ],
+                          [ 'availbatch' ],
+                          [ 'latanum' ],
+                        ],
+      'foreign_keys' => [
+                          { columns    => [ 'exportnum' ],
+                            table      => 'part_export',
+                          },
+                          { columns    => [ 'latanum' ],
+                            table      => 'lata',
+                          },
+                          { columns    => [ 'msanum' ],
+                            table      => 'msa',
+                          },
+                          { columns    => [ 'ordernum' ],
+                            table      => 'did_order',
+                          },
+                          { columns    => [ 'svcnum' ],
+                            table      => 'svc_phone',
+                          },
+                        ],
     },
-    
+
     'lata' => {
       'columns' => [
         'latanum',    'int',      '',      '', '', '', 
@@ -3781,7 +5422,7 @@ sub tables_hashref {
       'unique' => [],
       'index'  => [],
     },
-    
+
     'msa' => {
       'columns' => [
         'msanum',    'int',      '',      '', '', '', 
@@ -3791,7 +5432,7 @@ sub tables_hashref {
       'unique' => [],
       'index'  => [],
     },
-    
+
     'rate_center' => {
       'columns' => [
         'ratecenternum',    'serial',      '',      '', '', '', 
@@ -3811,7 +5452,7 @@ sub tables_hashref {
       'unique' => [],
       'index'  => [],
     },
-    
+
     'did_order_item' => {
       'columns' => [
         'orderitemnum',    'serial',      '',      '', '', '', 
@@ -3824,9 +5465,26 @@ sub tables_hashref {
         'quantity',      'int',     '',      '', '', '',
         'custnum',   'int', 'NULL', '', '', '',
       ],
-      'primary_key' => 'orderitemnum',
-      'unique' => [],
-      'index'  => [],
+      'primary_key'  => 'orderitemnum',
+      'unique'       => [],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'ordernum' ],
+                            table      => 'did_order',
+                          },
+                          { columns    => [ 'msanum' ],
+                            table      => 'msa',
+                          },
+                          { columns    => [ 'latanum' ],
+                            table      => 'lata',
+                          },
+                          { columns    => [ 'ratecenternum' ],
+                            table      => 'rate_center',
+                          },
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                        ],
     },
 
     'did_order' => {
@@ -3839,9 +5497,17 @@ sub tables_hashref {
         'confirmed',      'int',     'NULL',      '', '', '',
         'received',      'int',     'NULL',      '', '', '',
       ],
-      'primary_key' => 'ordernum',
-      'unique' => [ [ 'vendornum', 'vendor_order_id' ] ],
-      'index'  => [],
+      'primary_key'  => 'ordernum',
+      'unique'       => [ [ 'vendornum', 'vendor_order_id' ] ],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'vendornum' ],
+                            table      => 'did_vendor',
+                          },
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                        ],
     },
 
     'reason_type' => {
@@ -3864,9 +5530,19 @@ sub tables_hashref {
         'unsuspend_pkgpart', 'int',  'NULL', '', '', '',
         'unsuspend_hold','char',    'NULL', 1, '', '',
       ],
-      'primary_key' => 'reasonnum',
-      'unique' => [],
-      'index' => [],
+      'primary_key'  => 'reasonnum',
+      'unique'       => [],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'reason_type' ],
+                            table      => 'reason_type',
+                            references => [ 'typenum' ],
+                          },
+                          { columns    => [ 'unsuspend_pkgpart' ],
+                            table      => 'part_pkg',
+                            references => [ 'pkgpart' ],
+                          },
+                        ],
     },
 
     'conf' => {
@@ -3877,9 +5553,14 @@ sub tables_hashref {
         'name',     'varchar',    '', $char_d, '', '', 
         'value',    'text',   'NULL',      '', '', '',
       ],
-      'primary_key' => 'confnum',
-      'unique' => [ [ 'agentnum', 'locale', 'name' ] ],
-      'index' => [],
+      'primary_key'  => 'confnum',
+      'unique'       => [ [ 'agentnum', 'locale', 'name' ] ],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                        ],
     },
 
     'pkg_referral' => {
@@ -3888,9 +5569,17 @@ sub tables_hashref {
         'pkgnum',        'int',    '', '', '', '',
         'refnum',        'int',    '', '', '', '',
       ],
-      'primary_key' => 'pkgrefnum',
-      'unique'      => [ [ 'pkgnum', 'refnum' ] ],
-      'index'       => [ [ 'pkgnum' ], [ 'refnum' ] ],
+      'primary_key'  => 'pkgrefnum',
+      'unique'       => [ [ 'pkgnum', 'refnum' ] ],
+      'index'        => [ [ 'pkgnum' ], [ 'refnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'pkgnum' ],
+                            table      => 'cust_pkg',
+                          },
+                          { columns    => [ 'refnum' ],
+                            table      => 'part_referral',
+                          },
+                        ],
     },
 
     'svc_pbx' => {
@@ -3901,9 +5590,14 @@ sub tables_hashref {
         'max_extensions',   'int', 'NULL',      '', '', '',
         'max_simultaneous', 'int', 'NULL',      '', '', '',
       ],
-      'primary_key' => 'svcnum',
-      'unique' => [],
-      'index'  => [ [ 'id' ] ],
+      'primary_key'  => 'svcnum',
+      'unique'       => [],
+      'index'        => [ [ 'id' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                        ],
     },
 
     'svc_mailinglist' => { #svc_group?
@@ -3917,9 +5611,21 @@ sub tables_hashref {
         'reject_auto',      'char', 'NULL',             1, '', '',#RejectAuto
         'remove_to_and_cc', 'char', 'NULL',             1, '', '',#RemoveToAndCc
       ],
-      'primary_key' => 'svcnum',
-      'unique' => [],
-      'index'  => [ ['username'], ['domsvc'], ['listnum'] ],
+      'primary_key'  => 'svcnum',
+      'unique'       => [],
+      'index'        => [ ['username'], ['domsvc'], ['listnum'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                          { columns    => [ 'domsvc' ],
+                            table      => 'svc_domain', #'cust_svc',
+                            references => [ 'svcnum' ],
+                          },
+                          { columns    => [ 'listnum' ],
+                            table      => 'mailinglist',
+                          },
+                        ],
     },
 
     'mailinglist' => {
@@ -3940,9 +5646,20 @@ sub tables_hashref {
         'contactemailnum',     'int', 'NULL',   '', '', '', 
         'email',           'varchar', 'NULL',  255, '', '', 
       ],
-      'primary_key' => 'membernum',
-      'unique'      => [],
-      'index'       => [['listnum'],['svcnum'],['contactemailnum'],['email']],
+      'primary_key'  => 'membernum',
+      'unique'       => [],
+      'index'        => [['listnum'],['svcnum'],['contactemailnum'],['email']],
+      'foreign_keys' => [
+                          { columns    => [ 'listnum' ],
+                            table      => 'mailinglist',
+                          },
+                          { columns    => [ 'svcnum' ],
+                            table      => 'svc_acct',
+                          },
+                          { columns    => [ 'contactemailnum' ],
+                            table      => 'contact_email',
+                          },
+                        ],
     },
 
     'bill_batch' => {
@@ -3952,9 +5669,14 @@ sub tables_hashref {
         'status',             'char', 'NULL', '1', '', '',
         'pdf',                'blob', 'NULL',  '', '', '',
       ],
-      'primary_key' => 'batchnum',
-      'unique'      => [],
-      'index'       => [ ['agentnum'] ],
+      'primary_key'  => 'batchnum',
+      'unique'       => [],
+      'index'        => [ ['agentnum'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                        ],
     },
 
     'cust_bill_batch' => {
@@ -3963,9 +5685,17 @@ sub tables_hashref {
         'batchnum',            'int',     '', '', '', '',
         'invnum',              'int',     '', '', '', '',
       ],
-      'primary_key' => 'billbatchnum',
-      'unique'      => [],
-      'index'       => [ [ 'batchnum' ], [ 'invnum' ] ],
+      'primary_key'  => 'billbatchnum',
+      'unique'       => [],
+      'index'        => [ [ 'batchnum' ], [ 'invnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'batchnum' ],
+                            table      => 'bill_batch',
+                          },
+                          { columns    => [ 'invnum' ],
+                            table      => 'cust_bill',
+                          },
+                        ],
     },
 
     'cust_bill_batch_option' => {
@@ -3975,10 +5705,15 @@ sub tables_hashref {
         'optionname', 'varchar', '', $char_d, '', '', 
         'optionvalue', 'text', 'NULL', '', '', '', 
       ],
-      'primary_key' => 'optionnum',
-      'unique'      => [],
-      'index'       => [ [ 'billbatchnum' ], [ 'optionname' ] ],
-    },
+      'primary_key'  => 'optionnum',
+      'unique'       => [],
+      'index'        => [ [ 'billbatchnum' ], [ 'optionname' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'billbatchnum' ],
+                            table      => 'cust_bill_batch',
+                          },
+                        ],
+     },
 
     'msg_template' => {
       'columns' => [
@@ -3992,9 +5727,14 @@ sub tables_hashref {
         'from_addr', 'varchar', 'NULL',     255, '', '',
         'bcc_addr',  'varchar', 'NULL',     255, '', '',
       ],
-      'primary_key' => 'msgnum',
-      'unique'      => [ ],
-      'index'       => [ ['agentnum'], ],
+      'primary_key'  => 'msgnum',
+      'unique'       => [ ],
+      'index'        => [ ['agentnum'], ],
+      'foreign_keys' => [
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                        ],
     },
 
     'template_content' => {
@@ -4005,9 +5745,14 @@ sub tables_hashref {
         'subject',   'varchar', 'NULL',     512, '', '',
         'body',         'text', 'NULL',      '', '', '',
       ],
-      'primary_key' => 'contentnum',
-      'unique'      => [ ['msgnum', 'locale'] ],
-      'index'       => [ ],
+      'primary_key'  => 'contentnum',
+      'unique'       => [ ['msgnum', 'locale'] ],
+      'index'        => [ ],
+      'foreign_keys' => [
+                          { columns    => [ 'msgnum' ],
+                            table      => 'msg_template',
+                          },
+                        ],
     },
 
     'cust_msg' => {
@@ -4023,9 +5768,17 @@ sub tables_hashref {
         'error',     'varchar', 'NULL',    255, '', '',
         'status',    'varchar',     '',$char_d, '', '',
       ],
-      'primary_key' => 'custmsgnum',
-      'unique'      => [ ],
-      'index'       => [ ['custnum'], ],
+      'primary_key'  => 'custmsgnum',
+      'unique'       => [ ],
+      'index'        => [ ['custnum'], ],
+      'foreign_keys' => [
+                          { columns    => [ 'custnum' ],
+                            table      => 'cust_main',
+                          },
+                          { columns    => [ 'msgnum' ],
+                            table      => 'msg_template',
+                          },
+                        ],
     },
 
     'svc_cert' => {
@@ -4044,9 +5797,17 @@ sub tables_hashref {
         'country',              'char', 'NULL',       2, '', '',
         'cert_contact',      'varchar', 'NULL', $char_d, '', '',
       ],
-      'primary_key' => 'svcnum',
-      'unique' => [],
-      'index'  => [], #recnum
+      'primary_key'  => 'svcnum',
+      'unique'       => [],
+      'index'        => [], #recnum
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                          { columns    => [ 'recnum' ],
+                            table      => 'domain_record',
+                          },
+                        ],
     },
 
     'svc_port' => {
@@ -4054,9 +5815,14 @@ sub tables_hashref {
         'svcnum',                'int',     '',      '', '', '', 
         'serviceid', 'varchar', '', 64, '', '', #srvexport / reportfields
       ],
-      'primary_key' => 'svcnum',
-      'unique' => [],
-      'index'  => [], #recnum
+      'primary_key'  => 'svcnum',
+      'unique'       => [],
+      'index'        => [], #recnum
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                        ],
     },
 
     'areacode'  => {
@@ -4081,7 +5847,7 @@ sub tables_hashref {
         'statustext', 'varchar', 'NULL', $char_d, '', '',
       ],
       'primary_key' => 'upgradenum',
-      'unique' => [ [ 'upgradenum' ] ],
+      'unique' => [],
       'index' => [ [ 'upgrade' ] ],
     },
 
@@ -4098,9 +5864,14 @@ sub tables_hashref {
         'subject', 'varchar', 'NULL', '255', '', '',
         'handling', 'varchar', 'NULL', $char_d, '', '',
       ],
-      'primary_key' => 'targetnum',
-      'unique' => [ [ 'targetnum' ] ],
-      'index' => [],
+      'primary_key'   => 'targetnum',
+      'unique'        => [ [ 'targetnum' ] ],
+      'index'         => [],
+      'foreign_keys' => [
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                        ],
     },
 
     'log' => {
@@ -4113,9 +5884,14 @@ sub tables_hashref {
         'level',      'int',  '', '', '', '',
         'message',    'text', '', '', '', '',
       ],
-      'primary_key' => 'lognum',
-      'unique'      => [],
-      'index'       => [ ['_date'], ['level'] ],
+      'primary_key'  => 'lognum',
+      'unique'       => [],
+      'index'        => [ ['_date'], ['level'] ],
+      'foreign_keys' => [
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                        ],
     },
 
     'log_context' => {
@@ -4124,9 +5900,165 @@ sub tables_hashref {
         'lognum', 'int', '', '', '', '',
         'context', 'varchar', '', 32, '', '',
       ],
-      'primary_key' => 'logcontextnum',
-      'unique' => [ [ 'lognum', 'context' ] ],
-      'index' => [],
+      'primary_key'  => 'logcontextnum',
+      'unique'       => [ [ 'lognum', 'context' ] ],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'lognum' ],
+                            table      => 'log',
+                          },
+                        ],
+    },
+
+    'svc_alarm' => {
+      'columns' => [
+        'svcnum',          'int',      '',      '', '', '', 
+        'alarm_system', 'varchar',     '', $char_d, '', '', # dropdowns?
+        'alarm_type',   'varchar',     '', $char_d, '', '', #
+        'acctnum',      'varchar',     '', $char_d, '', '',
+        '_password',    'varchar',     '', $char_d, '', '',
+        'location',     'varchar', 'NULL', $char_d, '', '',
+        #cs
+        #rep
+      ],
+      'primary_key'  => 'svcnum',
+      'unique'       => [], #system/type/acctnum??
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                        ],
+    },
+
+    'svc_cable' => {
+      'columns' => [
+        'svcnum',        'int',     '',      '', '', '', 
+        'providernum',   'int', 'NULL',      '', '', '',
+        'ordernum',  'varchar', 'NULL', $char_d, '', '',
+        'modelnum',      'int', 'NULL',      '', '', '',
+        'serialnum', 'varchar', 'NULL', $char_d, '', '',
+        'mac_addr',  'varchar', 'NULL',      12, '', '', 
+      ],
+      'primary_key'  => 'svcnum',
+      'unique'       => [],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'svcnum' ],
+                            table      => 'cust_svc',
+                          },
+                          { columns    => [ 'providernum' ],
+                            table      => 'cable_provider',
+                          },
+                          { columns    => [ 'modelnum' ],
+                            table      => 'cable_model',
+                          },
+                        ],
+    },
+
+    'cable_model' => {
+      'columns' => [
+        'modelnum',    'serial',     '',      '', '', '',
+        'model_name', 'varchar',     '', $char_d, '', '',
+        'disabled',      'char', 'NULL',       1, '', '', 
+      ],
+      'primary_key' => 'modelnum',
+      'unique' => [ [ 'model_name' ], ],
+      'index'  => [],
+    },
+
+    'cable_provider' => {
+      'columns' => [
+        'providernum', 'serial',     '',      '', '', '',
+        'provider',   'varchar',     '', $char_d, '', '',
+        'disabled',      'char', 'NULL',       1, '', '', 
+      ],
+      'primary_key' => 'providernum',
+      'unique' => [ [ 'provider' ], ],
+      'index'  => [],
+    },
+
+    'vend_main' => {
+      'columns' => [
+        'vendnum',   'serial',     '',      '', '', '',
+        'vendname', 'varchar',     '', $char_d, '', '',
+        'classnum',     'int',     '',      '', '', '',
+        'disabled',    'char', 'NULL',       1, '', '', 
+      ],
+      'primary_key'  => 'vendnum',
+      'unique'       => [ ['vendname', 'disabled'] ],
+      'index'        => [],
+      'foreign_keys' => [
+                          { columns    => [ 'classnum' ],
+                            table      => 'vend_class',
+                          },
+                        ],
+    },
+
+    'vend_class' => {
+      'columns' => [
+        'classnum',     'serial',     '',      '', '', '', 
+        'classname',   'varchar',     '', $char_d, '', '', 
+        'disabled',       'char', 'NULL',       1, '', '', 
+      ],
+      'primary_key' => 'classnum',
+      'unique'      => [],
+      'index'       => [ ['disabled'] ],
+    },
+
+    'vend_bill' => {
+      'columns' => [
+        'vendbillnum',    'serial',     '',      '', '', '', 
+        'vendnum',           'int',     '',      '', '', '', 
+        '_date',        @date_type,                  '', '', 
+        'charged',     @money_type,                  '', '', 
+      ],
+      'primary_key'  => 'vendbillnum',
+      'unique'       => [],
+      'index'        => [ ['vendnum'], ['_date'], ],
+      'foreign_keys' => [
+                          { columns    => [ 'vendnum' ],
+                            table      => 'vend_main',
+                          },
+                        ],
+    },
+
+    'vend_pay' => {
+      'columns' => [
+        'vendpaynum',   'serial',    '',       '', '', '',
+        'vendnum',         'int',    '',       '', '', '', 
+        '_date',     @date_type,                   '', '', 
+        'paid',      @money_type,                  '', '', 
+      ],
+      'primary_key'  => 'vendpaynum',
+      'unique'       => [],
+      'index'        => [ [ 'vendnum' ], [ '_date' ], ],
+      'foreign_keys' => [
+                          { columns    => [ 'vendnum' ],
+                            table      => 'vend_main',
+                          },
+                        ],
+    },
+
+    'vend_bill_pay' => {
+      'columns' => [
+        'vendbillpaynum', 'serial',     '',   '', '', '', 
+        'vendbillnum',       'int',     '',   '', '', '', 
+        'vendpaynum',        'int',     '',   '', '', '', 
+        'amount',  @money_type, '', '', 
+        #? '_date',   @date_type, '', '', 
+      ],
+      'primary_key'  => 'vendbillpaynum',
+      'unique'       => [],
+      'index'        => [ [ 'vendbillnum' ], [ 'vendpaynum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'vendbillnum' ],
+                            table      => 'vend_bill',
+                          },
+                          { columns    => [ 'vendpaynum' ],
+                            table      => 'vend_pay',
+                          },
+                        ],
     },
 
     %{ tables_hashref_torrus() },
@@ -4149,11 +6081,72 @@ sub tables_hashref {
         'derivenum',       'int', '', '', '', '',
         'serviceid',   'varchar', '', 64, '', '', #srvexport / reportfields
       ],
-      'primary_key' => 'componentnum',
-      'unique'      => [ [ 'derivenum', 'serviceid' ], ],
-      'index'       => [ [ 'derivenum', ], ],
+      'primary_key'  => 'componentnum',
+      'unique'       => [ [ 'derivenum', 'serviceid' ], ],
+      'index'        => [ [ 'derivenum', ], ],
+      'foreign_keys' => [
+                          { columns    => [ 'derivenum' ],
+                            table      => 'torrus_srvderive',
+                          },
+                        ],
     },
 
+    'invoice_mode' => {
+      'columns' => [
+        'modenum',      'serial', '', '', '', '',
+        'agentnum',        'int', 'NULL', '', '', '',
+        'modename',    'varchar', '', 32, '', '',
+      ],
+      'primary_key' => 'modenum',
+      'unique'      => [ ],
+      'index'       => [ ],
+      'foreign_keys' => [
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                        ],
+    },
+
+    'invoice_conf' => {
+      'columns' => [
+        'confnum',              'serial',   '', '', '', '',
+        'modenum',              'int',      '', '', '', '',
+        'locale',               'varchar',  'NULL', 16, '', '',
+        'notice_name',          'varchar',  'NULL', 64, '', '',
+        'subject',              'varchar',  'NULL', 64, '', '',
+        'htmlnotes',            'text',     'NULL', '', '', '',
+        'htmlfooter',           'text',     'NULL', '', '', '',
+        'htmlsummary',          'text',     'NULL', '', '', '',
+        'htmlreturnaddress',    'text',     'NULL', '', '', '',
+        'latexnotes',           'text',     'NULL', '', '', '',
+        'latexfooter',          'text',     'NULL', '', '', '',
+        'latexsummary',         'text',     'NULL', '', '', '',
+        'latexcoupon',          'text',     'NULL', '', '', '',
+        'latexsmallfooter',     'text',     'NULL', '', '', '',
+        'latexreturnaddress',   'text',     'NULL', '', '', '',
+        'latextopmargin',       'varchar',  'NULL', 16, '', '',
+        'latexheadsep',         'varchar',  'NULL', 16, '', '',
+        'latexaddresssep',      'varchar',  'NULL', 16, '', '',
+        'latextextheight',      'varchar',  'NULL', 16, '', '',
+        'latexextracouponspace','varchar',  'NULL', 16, '', '',
+        'latexcouponfootsep',   'varchar',  'NULL', 16, '', '',
+        'latexcouponamountenclosedsep', 'varchar',  'NULL', 16, '', '',
+        'latexcoupontoaddresssep',      'varchar',  'NULL', 16, '', '',
+        'latexverticalreturnaddress',      'char',  'NULL',  1, '', '',
+        'latexcouponaddcompanytoaddress',  'char',  'NULL',  1, '', '',
+        'logo_png',             'blob',     'NULL', '', '', '',
+        'logo_eps',             'blob',     'NULL', '', '', '',
+        'lpr',                  'varchar',  'NULL', $char_d, '', '',
+      ],
+      'primary_key'  => 'confnum',
+      'unique'       => [ [ 'modenum', 'locale' ] ],
+      'index'        => [ ],
+      'foreign_keys' => [
+                          { columns    => [ 'modenum' ],
+                            table      => 'invoice_mode',
+                          },
+                        ],
+    },
 
     # name type nullability length default local
 

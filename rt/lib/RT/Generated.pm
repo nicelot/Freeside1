@@ -2,7 +2,7 @@
 #
 # COPYRIGHT:
 #
-# This software is Copyright (c) 1996-2012 Best Practical Solutions, LLC
+# This software is Copyright (c) 1996-2013 Best Practical Solutions, LLC
 #                                          <sales@bestpractical.com>
 #
 # (Except where explicitly superseded by other copyright notices)
@@ -50,7 +50,7 @@ package RT;
 use warnings;
 use strict;
 
-our $VERSION = '4.0.8';
+our $VERSION = '4.0.13';
 
 
 
@@ -67,7 +67,7 @@ $LocalLibPath        =    '/opt/rt3/local/lib';
 $LocalLexiconPath = '/opt/rt3/local/po';
 $LocalPluginPath = '/opt/rt3/local/plugins';
 # $MasonComponentRoot is where your rt instance keeps its mason html files
-$MasonComponentRoot = '/var/www/freeside/rt';
+$MasonComponentRoot = '/var/www/html/freeside/rt';
 # $MasonLocalComponentRoot is where your rt instance keeps its site-local
 # mason html files.
 $MasonLocalComponentRoot = '/opt/rt3/local/html';

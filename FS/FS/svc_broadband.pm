@@ -3,6 +3,7 @@ use base qw(
   FS::svc_Radius_Mixin
   FS::svc_Tower_Mixin
   FS::svc_IP_Mixin 
+  FS::svc_MAC_Mixin
   FS::svc_Common
   );
 
@@ -234,10 +235,11 @@ sub search_sql {
   my( $class, $string ) = @_;
   if ( $string =~ /^(\d{1,3}\.){3}\d{1,3}$/ ) {
     $class->search_sql_field('ip_addr', $string );
-  } elsif ( $string =~ /^([a-fA-F0-9]{12})$/ ) {
+  } elsif ( $string =~ /^([A-F0-9]{12})$/i ) {
     $class->search_sql_field('mac_addr', uc($string));
-  } elsif ( $string =~ /^(([a-fA-F0-9]{1,2}:){5}([a-fA-F0-9]{1,2}))$/ ) {
-    $class->search_sql_field('mac_addr', uc("$2$3$4$5$6$7") );
+  } elsif ( $string =~ /^(([A-F0-9]{2}:){5}([A-F0-9]{2}))$/i ) {
+    $string =~ s/://g;
+    $class->search_sql_field('mac_addr', uc($string) );
   } elsif ( $string =~ /^(\d+)$/ ) {
     my $table = $class->table;
     "$table.svcnum = $1";
@@ -261,7 +263,7 @@ sub smart_search {
 
 =item label
 
-Returns the IP address.
+Returns the IP address, MAC address and description.
 
 =cut
 
@@ -418,27 +420,16 @@ sub _check_duplicate {
   '';
 }
 
-=item mac_addr_formatted CASE DELIMITER
-
-Format the MAC address (for use by exports).  If CASE starts with "l"
-(for "lowercase"), it's returned in lowercase.  DELIMITER is inserted
-between octets.
-
-=cut
-
-sub mac_addr_formatted {
-  my $self = shift;
-  my ($case, $delim) = @_;
-  my $addr = $self->mac_addr;
-  $addr = lc($addr) if $case =~ /^l/i;
-  join( $delim || '', $addr =~ /../g );
-}
-
 #class method
 sub _upgrade_data {
   my $class = shift;
 
   local($FS::svc_Common::noexport_hack) = 1;
+
+  # fix wrong-case MAC addresses
+  my $dbh = dbh;
+  $dbh->do('UPDATE svc_broadband SET mac_addr = UPPER(mac_addr);')
+    or die $dbh->errstr;
 
   # set routernum to addr_block.routernum
   foreach my $self (qsearch('svc_broadband', {

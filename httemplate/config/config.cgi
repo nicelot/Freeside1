@@ -92,7 +92,7 @@ Setting <b><% $key %></b>
 %   } elsif ( $type eq 'select' || $type eq 'selectmultiple' )  {
 %     $submit++;
  
-  <select name="<% "$key$n" %>" <% $type eq 'selectmultiple' ? 'MULTIPLE' : '' %>>
+  <select name="<% "$key$n" %>" <% $type eq 'selectmultiple' ? 'MULTIPLE' : '' %> size='15'>
 
 %
 %     my %hash = ();
@@ -149,14 +149,16 @@ Setting <b><% $key %></b>
 %   } elsif ( $type eq 'select-sub' ) {
 %     $submit++;
 
-  <select name="<% "$key$n" %>" <% $config_item->multiple ? 'MULTIPLE' : '' %>>
+  <select name="<% "$key$n" %>" <% $config_item->multiple ? 'MULTIPLE' : '' %> size='15' >
 
 %     unless ( $config_item->multiple ) {
         <option value="">
 %     }
 
 %     my %options = &{$config_item->options_sub};
-%     my @options = sort { $a <=> $b } keys %options;
+%     my @options = keys %options;
+%     my $sortsub = $config_item->sort_sub || sub { $a <=> $b };
+%     @options = sort $sortsub @options;
 %     my %saw;
 %     foreach my $value ( @options ) {
 %       local($^W)=0; next if $saw{$value}++;
@@ -166,9 +168,7 @@ Setting <b><% $key %></b>
 %         if ( $value eq $conf->config($key, $agentnum)
 %              || ( $config_item->multiple
 %                   && grep { $_ eq $value } $conf->config($key, $agentnum) ) ){
-
             SELECTED
-
 %         }
 
         ><% $value %>: <% $options{$value} %>

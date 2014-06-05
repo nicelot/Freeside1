@@ -1,6 +1,6 @@
 <BR>
 <FONT CLASS="fsinnerbox-title">Contacts</FONT>
-<A HREF="<%$p%>/edit/cust_main-contacts.html?<% $cust_main->custnum %>">Edit contacts</A>
+<A HREF="<%$p%>edit/cust_main-contacts.html?<% $cust_main->custnum %>">Edit contacts</A>
 <TABLE CLASS="fsinnerbox">
 %   foreach my $contact ( @contacts ) {
 %     #XXX maybe this should be a table with alternating colors instead
@@ -22,7 +22,7 @@
 %                   })
 %           or next;
           <TD ALIGN="right">&nbsp;&nbsp;&nbsp;<% $phone_type->typename %> phone</TD>
-          <TD BGCOLOR="#FFFFFF"><% $contact_phone->phonenum |h %></TD>
+          <TD BGCOLOR="#FFFFFF"><% $contact_phone->phonenum_pretty |h %></TD>
 %       }
 
       </TR>

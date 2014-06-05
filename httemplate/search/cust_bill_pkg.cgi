@@ -10,6 +10,7 @@
                    emt('Description'),
                    @post_desc_header,
                    @peritem_desc,
+                   @currency_desc,
                    emt('Invoice'),
                    emt('Date'),
                    emt('Paid'),
@@ -32,6 +33,7 @@
                    #strikethrough or "N/A ($amount)" or something these when
                    # they're not applicable to pkg_tax search
                    @peritem_sub,
+                   @currency_sub,
                    'invnum',
                    sub { time2str('%b %d %Y', shift->_date ) },
                    sub { sprintf($money_char.'%.2f', shift->get('pay_amount')) },
@@ -44,10 +46,12 @@
                    '',
                    @post_desc_null,
                    @peritem,
+                   @currency,
                    'invnum',
                    '_date',
-                   #'pay_amount',
-                   #'credit_amount',
+                   '', #'pay_amount',
+                   '', #'credit_amount',
+                   FS::UI::Web::cust_sort_fields(),
                  ],
                  'links'       => [
                    @pkgnum_null,
@@ -55,6 +59,7 @@
                    '',
                    @post_desc_null,
                    @peritem_null,
+                   @currency_null,
                    $ilink,
                    $ilink,
                    $pay_link,
@@ -68,6 +73,7 @@
                             'rl'.
                             $post_desc_align.
                             $peritem_align.
+                            $currency_align.
                             'rcrr'.
                             FS::UI::Web::cust_aligns(),
                  'color' => [ 
@@ -76,6 +82,7 @@
                               '',
                               @post_desc_null,
                               @peritem_null,
+                              @currency_null,
                               '',
                               '',
                               '',
@@ -88,6 +95,7 @@
                               '',
                               @post_desc_null,
                               @peritem_null,
+                              @currency_null,
                               '',
                               '',
                               '',
@@ -124,6 +132,10 @@ Filtering parameters:
 
 - classnum: Filter on package class.
 
+- report_optionnum: Filter on package report class.  Can be a single report
+  class number or a comma-separated list (where 0 is "no report class"), or the
+  word "multiple".
+
 - use_override: Apply "classnum" and "taxclass" filtering based on the 
   override (bundle) pkgpart, rather than always using the true pkgpart.
 
@@ -133,8 +145,8 @@ Filtering parameters:
 
 - taxnum: Limit to items whose tax definition matches this taxnum.
   With "nottax" that means items that are subject to that tax;
-  with "istax" it's the tax charges themselves.  Can be specified 
-  more than once to include multiple taxes.
+  with "istax" it's the tax charges themselves.  Can be a comma-separated
+  list to include multiple taxes.
 
 - country, state, county, city: Limit to items whose tax location 
   matches these fields.  If "nottax" it's the tax location of the package;
@@ -196,6 +208,23 @@ my @total_desc = ( $money_char.'%.2f total' ); # sprintf strings
 my @peritem = ( 'setup', 'recur' );
 my @peritem_desc = ( 'Setup charge', 'Recurring charge' );
 
+my @currency_desc = ();
+my @currency_sub = ();
+my @currency = ();
+if ( $conf->config('currencies') ) {
+  @currency_desc = ( 'Setup billed', 'Recurring billed' );
+  @currency_sub = (
+    map {
+      my $what = $_;
+      sub { my $currency = $_[0]->get($what.'_billed_currency') or return '';
+            $currency. ' '. currency_symbol($currency, SYM_HTML).
+              $_[0]->get($what.'_billed_amount');
+          };
+    } qw( setup recur )
+  );
+  @currency = ( 'setup_billed_amount', 'recur_billed_amount' ); #for sorting
+}
+
 my @pkgnum_header = ();
 my @pkgnum = ();
 my @pkgnum_null;
@@ -222,7 +251,7 @@ if ( $conf->exists('enable_taxclasses') ) {
 
 # valid in both the tax and non-tax cases
 my $join_cust = 
-  " LEFT JOIN cust_bill USING (invnum)".
+  " LEFT JOIN cust_bill ON (cust_bill_pkg.invnum = cust_bill.invnum)".
   # use cust_pkg.locationnum if it exists
   FS::UI::Web::join_cust_main('cust_bill', 'cust_pkg');
 
@@ -255,6 +284,7 @@ if ( $cgi->param('agentnum') =~ /^(\d+)$/ ) {
   push @where, "cust_main.agentnum = $1";
 }
 
+# salesnum--see below
 # refnum
 if ( $cgi->param('refnum') =~ /^(\d+)$/ ) {
   push @where, "cust_main.refnum = $1";
@@ -303,8 +333,23 @@ if ( $cgi->param('nottax') ) {
   # not specified: all classes
   # 0: empty class
   # N: classnum
-  if ( $cgi->param('classnum') =~ /^(\d+)$/ ) {
-    push @where, "COALESCE($part_pkg.classnum, 0) = $1";
+  if ( grep { $_ eq 'classnum' } $cgi->param ) {
+    my @classnums = grep /^\d*$/, $cgi->param('classnum');
+    push @where, "COALESCE($part_pkg.classnum, 0) IN ( ".
+                     join(',', @classnums ).
+                 ' )'
+      if @classnums;
+  }
+
+  if ( grep { $_ eq 'report_optionnum' } $cgi->param ) {
+    my @nums = grep /^\w+$/, $cgi->param('report_optionnum');
+    my $num = join(',', @nums);
+    push @where, # code reuse FTW
+      FS::Report::Table->with_report_option( $num, $cgi->param('use_override'));
+  }
+
+  if ( $cgi->param('report_optionnum') =~ /^(\w+)$/ ) {
+    ;
   }
 
   # taxclass
@@ -329,11 +374,8 @@ if ( $cgi->param('nottax') ) {
   # we don't handle exempt_monthly here
   
   if ( $cgi->param('taxname') ) { # specific taxname
-      push @tax_where, 'cust_main_county.taxname = '.
+      push @tax_where, "COALESCE(cust_main_county.taxname, 'Tax') = ".
                         dbh->quote($cgi->param('taxname'));
-  } elsif ( $cgi->param('taxnameNULL') ) {
-      push @tax_where, 'cust_main_county.taxname IS NULL OR '.
-                       'cust_main_county.taxname = \'Tax\'';
   }
 
   # country:state:county:city:district (may be repeated)
@@ -361,12 +403,8 @@ if ( $cgi->param('nottax') ) {
   }
 
   # specific taxnums
-  if ( $cgi->param('taxnum') ) {
-    my $taxnum_in = join(',', 
-      grep /^\d+$/, $cgi->param('taxnum')
-    );
-    push @tax_where, "cust_main_county.taxnum IN ($taxnum_in)"
-      if $taxnum_in;
+  if ( $cgi->param('taxnum') =~ /^([\d,]+)$/) {
+    push @tax_where, "cust_main_county.taxnum IN ($1)";
   }
 
   # If we're showing exempt items, we need to find those with 
@@ -396,22 +434,16 @@ if ( $cgi->param('nottax') ) {
     USING (billpkgnum)";
   }
  
-  if ( @tax_where or $cgi->param('taxable') or $cgi->param('out') ) { 
-    # process tax restrictions
-    unshift @tax_where,
-      'cust_main_county.tax > 0';
+  # process tax restrictions
+  unshift @tax_where,
+    'cust_bill_pkg_tax_location.taxable_billpkgnum = cust_bill_pkg.billpkgnum',
+    'cust_main_county.tax > 0';
 
-    my $tax_sub = "SELECT invnum, cust_bill_pkg_tax_location.pkgnum
+  my $tax_sub = "SELECT 1
     FROM cust_bill_pkg_tax_location
     JOIN cust_bill_pkg AS tax_item USING (billpkgnum)
     JOIN cust_main_county USING (taxnum)
-    WHERE ". join(' AND ', @tax_where).
-    " GROUP BY invnum, cust_bill_pkg_tax_location.pkgnum";
-
-    $join_pkg .= " LEFT JOIN ($tax_sub) AS item_tax
-    ON (item_tax.invnum = cust_bill_pkg.invnum AND
-        item_tax.pkgnum = cust_bill_pkg.pkgnum)";
-  }
+    WHERE ". join(' AND ', @tax_where);
 
   # now do something with that
   if ( @exempt_where ) {
@@ -428,23 +460,17 @@ if ( $cgi->param('nottax') ) {
     my $taxable = 'cust_bill_pkg.setup + cust_bill_pkg.recur '.
                   '- COALESCE(item_exempt.exempt_amount, 0)';
 
-    push @where,    'item_tax.invnum IS NOT NULL';
     push @select,   "($taxable) AS taxable_amount";
+    push @where,    "EXISTS($tax_sub)";
     push @peritem,  'taxable_amount';
     push @peritem_desc, 'Taxable';
     push @total,    "SUM($taxable)";
     push @total_desc, "$money_char%.2f taxable";
 
-  } elsif ( $cgi->param('out') ) {
-  
-    push @where,    'item_tax.invnum IS NULL',
-                    'item_exempt.billpkgnum IS NULL';
-
   } elsif ( @tax_where ) {
 
     # union of taxable + all exempt_ cases
-    push @where,
-      '(item_tax.invnum IS NOT NULL OR item_exempt.billpkgnum IS NOT NULL)';
+    push @where, "(EXISTS($tax_sub) OR item_exempt.billpkgnum IS NOT NULL)";
 
   }
 
@@ -511,6 +537,21 @@ if ( $cgi->param('nottax') ) {
     # don't double-count the components of consolidated taxes
     $total[0] = 'COUNT(DISTINCT cust_bill_pkg.billpkgnum)';
     $total[1] = 'SUM(cust_bill_pkg_tax_location.amount)';
+
+    # package classnum
+    if ( grep { $_ eq 'classnum' } $cgi->param ) {
+      my @classnums = grep /^\d*$/, $cgi->param('classnum');
+      $join_pkg .= '
+        JOIN cust_pkg AS taxed_pkg 
+          ON (cust_bill_pkg_tax_location.pkgnum = taxed_pkg.pkgnum)
+        JOIN part_pkg AS taxed_part_pkg
+          ON (taxed_pkg.pkgpart = taxed_part_pkg.pkgpart)
+      ';
+      push @where, "COALESCE(taxed_part_pkg.classnum, 0) IN ( ".
+                       join(',', @classnums ).
+                   ' )'
+        if @classnums;
+    }
   }
 
   # taxclass
@@ -528,25 +569,8 @@ if ( $cgi->param('nottax') ) {
   }
 
   # specific taxnums
-  if ( $cgi->param('taxnum') ) {
-    my $taxnum_in = join(',', 
-      grep /^\d+$/, $cgi->param('taxnum')
-    );
-    push @where, "cust_main_county.taxnum IN ($taxnum_in)"
-      if $taxnum_in;
-  }
-
-  # report group (itemdesc)
-  if ( $cgi->param('report_group') =~ /^(=|!=) (.*)$/ ) {
-    my ( $group_op, $group_value ) = ( $1, $2 );
-    if ( $group_op eq '=' ) {
-      #push @where, 'itemdesc LIKE '. dbh->quote($group_value.'%');
-      push @where, 'itemdesc = '. dbh->quote($group_value);
-    } elsif ( $group_op eq '!=' ) {
-      push @where, '( itemdesc != '. dbh->quote($group_value) .' OR itemdesc IS NULL )';
-    } else {
-      die "guru meditation #00de: group_op $group_op\n";
-    }
+  if ( $cgi->param('taxnum') =~ /^([\d,]+)$/) {
+    push @where, "cust_main_county.taxnum IN ($1)";
   }
 
   # itemdesc, for some reason
@@ -643,6 +667,28 @@ if ( $cgi->param('credit') ) {
 
 push @select, 'cust_main.custnum', FS::UI::Web::cust_sql_fields();
 
+#salesnum
+if ( $cgi->param('salesnum') =~ /^(\d+)$/ ) {
+
+  my $salesnum = $1;
+  my $sales = FS::sales->by_key($salesnum)
+    or die "salesnum $salesnum not found";
+
+  my $subsearch = $sales->cust_bill_pkg_search('', '',
+    'cust_main_sales' => ($cgi->param('cust_main_sales') ? 1 : 0),
+    'paid'            => ($cgi->param('paid') ? 1 : 0),
+    'classnum'        => scalar($cgi->param('classnum'))
+  );
+  $join_pkg .= " JOIN sales_pkg_class ON ( COALESCE(sales_pkg_class.classnum, 0) = COALESCE( part_pkg.classnum, 0) )";
+
+  my $extra_sql = $subsearch->{extra_sql};
+  $extra_sql =~ s/^WHERE//;
+  push @where, $extra_sql;
+
+  $cgi->param('classnum', 0) unless $cgi->param('classnum');
+}
+
+
 my $where = join(' AND ', @where);
 $where &&= "WHERE $where";
 
@@ -671,6 +717,10 @@ my @peritem_sub = map {
 } @peritem;
 my @peritem_null = map { '' } @peritem; # placeholders
 my $peritem_align = 'r' x scalar(@peritem);
+
+@currency_desc = map {emt($_)} @currency_desc;
+my @currency_null = map { '' } @currency; # placeholders
+my $currency_align = 'r' x scalar(@currency);
 
 my $ilink = [ "${p}view/cust_bill.cgi?", 'invnum' ];
 my $clink = [ "${p}view/cust_main.cgi?", 'custnum' ];

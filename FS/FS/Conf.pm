@@ -1,10 +1,11 @@
 package FS::Conf;
 
-use vars qw($base_dir @config_items @base_items @card_types $DEBUG);
+our ($base_dir, @config_items, @base_items, @card_types, $DEBUG);
 use Carp;
 use IO::File;
 use File::Basename;
 use MIME::Base64;
+use Locale::Currency;
 use FS::ConfItem;
 use FS::ConfDefaults;
 use FS::Conf_compat17;
@@ -119,6 +120,7 @@ sub _config {
   my($self,$name,$agentnum,$agentonly)=@_;
   my $hashref = { 'name' => $name };
   local $FS::Record::conf = undef;  # XXX evil hack prevents recursion
+  #my $DEBUG = 5;
   my $cv;
   my @a = (
     ($agentnum || ()),
@@ -128,13 +130,37 @@ sub _config {
     ($self->{locale} || ()),
     ($self->{localeonly} && $self->{locale} ? () : '')
   );
+
   # try with the agentnum first, then fall back to no agentnum if allowed
+
+  if( ! $self->{'conf_cache'} ) {
+    ## is this checking for memcache itself? if so we don't want a inifinite loop!
+    #  So we'll handle is in a special manner
+    if( $name =~ m/^memcache/ ) {
+      return FS::Record::qsearchs('conf', { name => $name } );
+    }
+    else {
+      my $cached = FS::UID::get_cached;
+
+      $self->{'conf_cache'} = $cached->get('conf_cache') if $cached;
+      if( ! $self->{'conf_cache'} ) {
+        foreach my $c (qsearch('conf')) {
+          my $key = join(':',$c->name, $c->agentnum, $c->locale);
+          $self->{'conf_cache'}->{ $key } = $c;
+        }
+        $cached->set('conf_cache', $self->{'conf_cache'}) if $cached;
+      }
+    }
+  }
+  
   foreach my $a (@a) {
     $hashref->{agentnum} = $a;
     foreach my $l (@l) {
       $hashref->{locale} = $l;
-      $cv = FS::Record::qsearchs('conf', $hashref);
-      return $cv if $cv;
+      my $key = join(':',$name, $a, $l);
+      if ($self->{'conf_cache'}->{$key}){ 
+        return $self->{'conf_cache'}->{$key};
+      }
     }
   }
   return undef;
@@ -358,6 +384,13 @@ sub set {
     $error = $new->replace($old);
   } else {
     $error = $new->insert;
+  }
+  if (! $error) {
+    # clean the object cache
+    my $key = join(':',$name, $agentnum, $self->{locale});
+    $self->{'conf_cache'}->{ $key } = $new;
+    my $cached = FS::UID::get_cached;
+    $cached->set('conf_cache', $self->{'conf_cache'}) if $cached;
   }
 
   die "error setting configuration value: $error \n"
@@ -778,8 +811,8 @@ sub reason_type_options {
 
   {
     'key'         => 'alert_expiration',
-    'section'     => 'notification',
-    'description' => 'Enable alerts about billing method expiration (i.e. expiring credit cards).',
+    'section'     => 'deprecated',
+    'description' => 'Enable alerts about credit card expiration.  This is obsolete and no longer works.',
     'type'        => 'checkbox',
     'per_agent'   => 1,
   },
@@ -794,7 +827,7 @@ sub reason_type_options {
   
   {
     'key'         => 'alerter_msgnum',
-    'section'     => 'notification',
+    'section'     => 'deprecated',
     'description' => 'Template to use for credit card expiration alerts.',
     %msg_template_options,
   },
@@ -866,6 +899,13 @@ sub reason_type_options {
   },
 
   {
+    'key'         => 'anniversary-rollback',
+    'section'     => 'billing',
+    'description' => 'When billing an anniversary package ordered after the 28th, roll the anniversary date back to the 28th instead of forward into the following month.',
+    'type'        => 'checkbox',
+  },
+
+  {
     'key'         => 'encryption',
     'section'     => 'billing',
     'description' => 'Enable encryption of credit cards and echeck numbers',
@@ -927,7 +967,19 @@ sub reason_type_options {
     'type'        => 'text',
     'per_agent'   => 1,
   },
-  
+
+  {
+    'key'         => 'billco-account_num',
+    'section'     => 'billing',
+    'description' => 'The data to place in the "Transaction Account No" / "TRACCTNUM" field.',
+    'type'        => 'select',
+    'select_hash' => [
+                       'invnum-date' => 'Invoice number - Date (default)',
+                       'display_custnum'  => 'Customer number',
+                     ],
+    'per_agent'   => 1,
+  },
+
   {
     'key'         => 'next-bill-ignore-time',
     'section'     => 'billing',
@@ -999,9 +1051,22 @@ sub reason_type_options {
   {
     'key'         => 'currency',
     'section'     => 'billing',
-    'description' => 'Currency',
+    'description' => 'Main accounting currency',
     'type'        => 'select',
     'select_enum' => [ '', qw( USD AUD CAD DKK EUR GBP ILS JPY NZD XAF ) ],
+  },
+
+  {
+    'key'         => 'currencies',
+    'section'     => 'billing',
+    'description' => 'Additional accepted currencies',
+    'type'        => 'select-sub',
+    'multiple'    => 1,
+    'options_sub' => sub { 
+                           map { $_ => code2currency($_) } all_currency_codes();
+			 },
+    'sort_sub'    => sub ($$) { $_[0] cmp $_[1]; },
+    'option_sub'  => sub { code2currency(shift); },
   },
 
   {
@@ -1045,24 +1110,10 @@ sub reason_type_options {
   },
 
   {
-    'key'         => 'deletecustomers',
-    'section'     => 'UI',
-    'description' => 'Enable customer deletions.  Be very careful!  Deleting a customer will remove all traces that the customer ever existed!  It should probably only be used when auditing a legacy database.  Normally, you cancel all of a customers\' packages if they cancel service.',
-    'type'        => 'checkbox',
-  },
-
-  {
     'key'         => 'deleteinvoices',
     'section'     => 'UI',
-    'description' => 'Enable invoices deletions.  Be very careful!  Deleting an invoice will remove all traces that the invoice ever existed!  Normally, you would apply a credit against the invoice instead.',  #invoice voiding?
+    'description' => 'Enable invoices deletions.  Be very careful!  Deleting an invoice will remove all traces that the invoice ever existed!  Normally, you would void or apply a credit against the invoice instead.',
     'type'        => 'checkbox',
-  },
-
-  {
-    'key'         => 'deletepayments',
-    'section'     => 'billing',
-    'description' => 'Enable deletion of unclosed payments.  Really, with voids this is pretty much not recommended in any situation anymore.  Be very careful!  Only delete payments that were data-entry errors, not adjustments.  Optionally specify one or more comma-separated email addresses to be notified when a payment is deleted.',
-    'type'        => [qw( checkbox text )],
   },
 
   {
@@ -1521,16 +1572,24 @@ and customer address. Include units.',
   },
 
   { 
-    'key'         => 'invoice_include_aging',
-    'section'     => 'invoicing',
-    'description' => 'Show an aging line after the prior balance section.  Only valud when invoice_sections is enabled.',
-    'type'        => 'checkbox',
-  },
-
-  { 
     'key'         => 'invoice_sections',
     'section'     => 'invoicing',
     'description' => 'Split invoice into sections and label according to package category when enabled.',
+    'type'        => 'checkbox',
+    'per_agent'   => 1,
+  },
+
+  { 
+    'key'         => 'invoice_include_aging',
+    'section'     => 'invoicing',
+    'description' => 'Show an aging line after the prior balance section.  Only valid when invoice_sections is enabled.',
+    'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'invoice_sections_by_location',
+    'section'     => 'invoicing',
+    'description' => 'Divide invoice into sections according to service location.  Currently, this overrides sectioning by package category.',
     'type'        => 'checkbox',
     'per_agent'   => 1,
   },
@@ -1695,6 +1754,21 @@ and customer address. Include units.',
     'description' => 'Maximum password length (default 8) (don\'t set this over 12 if you need to import or export crypt() passwords)',
     'type'        => 'text',
   },
+
+  {
+    'key'         => 'sip_passwordmin',
+    'section'     => 'telephony',
+    'description' => 'Minimum SIP password length (default 6)',
+    'type'        => 'text',
+  },
+
+  {
+    'key'         => 'sip_passwordmax',
+    'section'     => 'telephony',
+    'description' => 'Maximum SIP password length (default 8) (don\'t set this over 12 if you need to import or export crypt() passwords)',
+    'type'        => 'text',
+  },
+
 
   {
     'key'         => 'password-noampersand',
@@ -2013,6 +2087,13 @@ and customer address. Include units.',
   },
 
   {
+    'key'         => 'show_ship_company',
+    'section'     => 'UI',
+    'description' => 'Turns on display/collection of a "service company name" field for customers.',
+    'type'        => 'checkbox',
+  },
+
+  {
     'key'         => 'show_ss',
     'section'     => 'UI',
     'description' => 'Turns on display/collection of social security numbers in the web interface.  Sometimes required by electronic check (ACH) processors.',
@@ -2262,6 +2343,13 @@ and customer address. Include units.',
     'section'     => 'self-service',
     'description' => 'Run a standalone self-service XML-RPC server on the backend (on port 8080).',
     'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'selfservice-timeout',
+    'section'     => 'self-service',
+    'description' => 'Timeout for the self-service login cookie, in seconds.  Defaults to 1 hour.',
+    'type'        => 'text',
   },
 
   {
@@ -2951,7 +3039,7 @@ and customer address. Include units.',
   {
     'key'         => 'network_monitoring_system',
     'section'     => 'network_monitoring',
-    'description' => 'Networking monitoring system (NMS) integration.  <b>Torrus_Internal</b> uses the built-in Torrus ticketing system (see the <a href="http://www.freeside.biz/mediawiki/index.php/Freeside:2.1:Documentation:Torrus_Installation">integrated networking monitoring system installation instructions</a>).',
+    'description' => 'Networking monitoring system (NMS) integration.  <b>Torrus_Internal</b> uses the built-in Torrus ticketing system (see the <a href="http://www.freeside.biz/mediawiki/index.php/Freeside:3:Documentation:Torrus_Installation">integrated networking monitoring system installation instructions</a>).',
     'type'        => 'select',
     'select_enum' => [ '', qw(Torrus_Internal) ],
   },
@@ -3413,13 +3501,6 @@ and customer address. Include units.',
   },
 
   {
-    'key'         => 'echeck-nonus',
-    'section'     => 'billing',
-    'description' => 'Disable ABA-format account checking for Electronic Check payment info',
-    'type'        => 'checkbox',
-  },
-
-  {
     'key'         => 'echeck-country',
     'section'     => 'billing',
     'description' => 'Format electronic check information for the specified country.',
@@ -3692,7 +3773,7 @@ and customer address. Include units.',
   {
     'key'         => 'batchconfig-eft_canada',
     'section'     => 'billing',
-    'description' => 'Configuration for EFT Canada batching, four lines: 1. SFTP username, 2. SFTP password, 3. Transaction code, 4. Number of days to delay process date.',
+    'description' => 'Configuration for EFT Canada batching, four lines: 1. SFTP username, 2. SFTP password, 3. Transaction code, 4. Number of days to delay process date.  If you are using separate per-agent batches (batch-spoolagent), you must set this option separately for each agent, as the global setting will be ignored.',
     'type'        => 'textarea',
     'per_agent'   => 1,
   },
@@ -3838,12 +3919,34 @@ and customer address. Include units.',
     'description' => 'Disable fuzzy searching.  Speeds up searching for large sites, but only shows exact matches.',
     'type'        => 'checkbox',
   },
+  
+  {
+    'key'         => 'fuzzy-method',
+    'section'     => 'UI',
+    'description' => 'What underlying strategy should be used for fuzzy searches? Defaults to "String::Approx".',
+    'type'        => 'select',
+    'select_enum' => ['String::Approx', 'PG levenschtein', 'pg_trgm'],
+  },
+  {
+    'key'         => 'fuzzy-method',
+    'section'     => 'UI',
+    'description' => 'What underlying strategy should be used for fuzzy searches? Defaults to "String::Approx".',
+    'type'        => 'select',
+    'select_enum' => ['String::Approx', 'PG levenschtein', 'pg_trgm'],
+  },
 
   {
     'key'         => 'fuzzy-fuzziness',
     'section'     => 'UI',
     'description' => 'Set the "fuzziness" of fuzzy searching (see the String::Approx manpage for details).  Defaults to 10%',
     'type'        => 'text',
+  },
+
+  {
+    'key'         => 'enable_fuzzy_on_exact',
+    'section'     => 'UI',
+    'description' => 'Enable approximate customer searching even when an exact match is found.',
+    'type'        => 'checkbox',
   },
 
   { 'key'         => 'pkg_referral',
@@ -4028,7 +4131,7 @@ and customer address. Include units.',
     'type'        => 'select',
     'multiple'    => 1,
     'select_hash' => [ 
-      #'address1' => 'Billing address',
+      'address' => 'Billing or service address',
     ],
   },
 
@@ -4119,6 +4222,13 @@ and customer address. Include units.',
   },
 
   {
+    'key'         => 'previous_balance-section',
+    'section'     => 'invoicing',
+    'description' => 'Show previous invoice balances in a separate invoice section.  Does not require invoice_sections to be enabled.',
+    'type'        => 'checkbox',
+  },
+
+  {
     'key'         => 'previous_balance-summary_only',
     'section'     => 'invoicing',
     'description' => 'Only show a single line summarizing the total previous balance rather than one line per invoice.',
@@ -4136,6 +4246,13 @@ and customer address. Include units.',
     'key'         => 'previous_balance-show_on_statements',
     'section'     => 'invoicing',
     'description' => 'Show previous invoices on statements, without itemized charges.',
+    'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'previous_balance-payments_since',
+    'section'     => 'invoicing',
+    'description' => 'Instead of showing payments (and credits) applied to the invoice, show those received since the previous invoice date.',
     'type'        => 'checkbox',
   },
 
@@ -4159,8 +4276,9 @@ and customer address. Include units.',
     'description' => 'Method for standardizing customer addresses.',
     'type'        => 'select',
     'select_hash' => [ '' => '', 
-                       'usps' => 'U.S. Postal Service',
+                       'usps'     => 'U.S. Postal Service',
                        'ezlocate' => 'EZLocate',
+                       'tomtom'   => 'TomTom',
                      ],
   },
 
@@ -4175,6 +4293,13 @@ and customer address. Include units.',
     'key'         => 'usps_webtools-password',
     'section'     => 'UI',
     'description' => 'Production password for USPS web tools.   Enables USPS address standardization.  See <a href="http://www.usps.com/webtools/">USPS website</a>, register and agree not to use the tools for batch purposes.',
+    'type'        => 'text',
+  },
+
+  {
+    'key'         => 'tomtom-userid',
+    'section'     => 'UI',
+    'description' => 'TomTom geocoding service API key.  See <a href="http://www.tomtom.com/">the TomTom website</a> to obtain a key.  This is recommended for addresses in the United States only.',
     'type'        => 'text',
   },
 
@@ -4209,9 +4334,9 @@ and customer address. Include units.',
   {
     'key'         => 'census_year',
     'section'     => 'UI',
-    'description' => 'The year to use in census tract lookups.  NOTE: you need to select 2012 for Year 2010 Census tract codes.  A selection of 2011 or 2010 provides Year 2000 Census tract codes.  Use the freeside-censustract-update tool if exisitng customers need to be changed.',
+    'description' => 'The year to use in census tract lookups.  NOTE: you need to select 2012 or 2013 for Year 2010 Census tract codes.  A selection of 2011 provides Year 2000 Census tract codes.  Use the freeside-censustract-update tool if exisitng customers need to be changed.',
     'type'        => 'select',
-    'select_enum' => [ qw( 2012 2011 2010 ) ],
+    'select_enum' => [ qw( 2013 2012 2011 ) ],
   },
 
   {
@@ -4344,6 +4469,13 @@ and customer address. Include units.',
     'key'         => 'order_pkg-no_start_date',
     'section'     => 'UI',
     'description' => 'Don\'t set a default start date for new packages.',
+    'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'part_pkg-delay_start',
+    'section'     => '',
+    'description' => 'Enabled "delayed start" option for packages.',
     'type'        => 'checkbox',
   },
 
@@ -4653,6 +4785,13 @@ and customer address. Include units.',
   },
 
   {
+    'key'         => 'ng_selfservice-menu',
+    'section'     => 'self-service',
+    'description' => 'Custom menu for the next-generation self-service interface.  Each line is in the format "link Label", for example "main.php Home".  Sub-menu items are listed on subsequent lines.  Blank lines terminate the submenu.', #more docs/examples would be helpful
+    'type'        => 'textarea',
+  },
+
+  {
     'key'         => 'signup-no_company',
     'section'     => 'self-service',
     'description' => "Don't display a field for company name on signup.",
@@ -4678,6 +4817,17 @@ and customer address. Include units.',
     'section'     => 'self-service',
     'description' => 'Issue a warning if the same credit card is used for multiple signups within this many hours.',
     'type'        => 'text',
+  },
+
+  {
+    'key'         => 'svc_phone-radius-password',
+    'section'     => 'telephony',
+    'description' => 'Password when exporting svc_phone records to RADIUS',
+    'type'        => 'select',
+    'select_hash' => [
+      '' => 'Use default from svc_phone-radius-default_password config',
+      'countrycode_phonenum' => 'Phone number (with country code)',
+    ],
   },
 
   {
@@ -4856,6 +5006,13 @@ and customer address. Include units.',
     'section'     => '',
     'description' => 'Time to sleep between attempts to find new jobs to process in the queue.  Defaults to 10.  Installations doing real-time CDR processing for prepaid may want to set it lower.',
     'type'        => 'text',
+  },
+
+  {
+    'key'         => 'queue-no_history',
+    'section'     => '',
+    'description' => "Don't recreate the h_queue and h_queue_arg tables on upgrades.  This can save disk space for large installs, especially when using prepaid or multi-process billing.  After turning this option on, drop the h_queue and h_queue_arg tables, run freeside-dbdef-create and restart Apache and Freeside.",
+    'type'        => 'checkbox',
   },
 
   {
@@ -5084,13 +5241,6 @@ and customer address. Include units.',
   },
 
   {
-    'key'         => 'maestro-status_test',
-    'section'     => 'UI',
-    'description' => 'Display a link to the maestro status test page on the customer view page',
-    'type'        => 'checkbox',
-  },
-
-  {
     'key'         => 'cust_main-custom_link',
     'section'     => 'UI',
     'description' => 'URL to use as source for the "Custom" tab in the View Customer page.  The customer number will be appended, or you can insert "$custnum" to have it inserted elsewhere.  "$agentnum" will be replaced with the agent number, and "$usernum" will be replaced with the employee number.',
@@ -5175,7 +5325,7 @@ and customer address. Include units.',
   {
     'key'         => 'svc_phone-did-summary',
     'section'     => 'invoicing',
-    'description' => 'Enable DID activity summary on invoices, showing # DIDs activated/deactivated/ported-in/ported-out and total minutes usage, covering period since last invoice.',
+    'description' => 'Experimental feature to enable DID activity summary on invoices, showing # DIDs activated/deactivated/ported-in/ported-out and total minutes usage, covering period since last invoice.',
     'type'        => 'checkbox',
   },
 
@@ -5240,13 +5390,6 @@ and customer address. Include units.',
     'description' => 'Which module to use for customer status display.  The "Classic" module (the default) considers accounts with cancelled recurring packages but un-cancelled one-time charges Inactive.  The "Recurring" module considers those customers Cancelled.  Similarly for customers with suspended recurring packages but one-time charges.', #other differences?
     'type'        => 'select',
     'select_enum' => [ 'Classic', 'Recurring' ],
-  },
-
-  {
-    'key'         => 'cust_main-print_statement_link',
-    'section'     => 'UI',
-    'description' => 'Show a link to download a current statement for the customer.',
-    'type'        => 'checkbox',
   },
 
   { 
@@ -5472,6 +5615,33 @@ and customer address. Include units.',
     'key'         => 'external_auth-access_group-template_user',
     'section'     => 'UI',
     'description' => 'When using an external authentication module, specifies the default access groups for autocreated users, via a template user.',
+    'type'        => 'text',
+  },
+
+  {
+    'key'         => 'allow_invalid_cards',
+    'section'     => '',
+    'description' => 'Accept invalid credit card numbers.  Useful for testing with fictitious customers.  There is no good reason to enable this in production.',
+    'type'        => 'checkbox',
+  },
+  {
+    'key'         => 'memcache',
+    'section'     => 'cache',
+    'description' => 'Enable Usage of a memcache system.',
+    'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'memcache-server',
+    'section'     => 'cache',
+    'description' => 'Memcache server to give as parameter for initialization (hostname:port)',
+    'type'        => 'textarea',
+  },
+
+  {
+    'key'         => 'cache_expire',
+    'section'     => 'cache',
+    'description' => 'Number of seconds to automatically age off any cached data',
     'type'        => 'text',
   },
 

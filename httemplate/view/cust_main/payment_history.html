@@ -115,7 +115,7 @@
 %# someday, perhaps.  very few gateways let you do unlinked refunds at all.
 %# Authorize.net makes you sign a special form
 %#
-%#    % if ( ( $payby{'CARD'} || $payby{'DCRD'} )
+%#    % if ( ( $payby{'CARD'} || $payby{'DCRD'} || $payby{'TOKN'} )
 %#    %        && $curuser->access_right('Process refund')
 %#    %        && ! $cust_main->is_encrypted($cust_main->payinfo)
 %#    %      ) {
@@ -141,10 +141,9 @@
 
 %# invoice reports, combined statement
 % if ( $curuser->access_right('List invoices') ) { 
-%   if ( $conf->exists('cust_main-print_statement_link')
-%        and $num_cust_bill > 0 ) {
+%   if ( $num_cust_bill > 0 ) {
   <A HREF="<% $p %>view/cust_main_statement-pdf.cgi?<% $custnum %>"><%
-  mt('Print a current statement') |h %></A>
+  mt('Download typeset statement PDF') |h %></A>
   <BR>
 %   }
   <A HREF="<% $p %>search/report_cust_bill.html?custnum=<% $custnum %>"><% mt('Invoice reports') |h %></A>
@@ -270,6 +269,11 @@
 %  my $credit  = exists($item->{'credit'})
 %                  ? sprintf("-&nbsp;$money_char\%.2f", $item->{'credit'})
 %                  : '';
+%
+%  $credit ||= sprintf( "<DEL>-&nbsp;$money_char\%.2f</DEL>",
+%                       $item->{'void_credit'}
+%                     )
+%    if exists($item->{'void_credit'});
 %
 %  my $refund  = exists($item->{'refund'})
 %                  ? sprintf("$money_char\%.2f", $item->{'refund'})
@@ -468,6 +472,15 @@ foreach my $cust_pay_void ($cust_main->cust_pay_void) {
     'void_payment' => $cust_pay_void->paid,
   };
 
+}
+
+#voided credits 
+foreach my $cust_credit_void ($cust_main->cust_credit_void) {
+  push @history, {
+    'date'        => $cust_credit_void->_date,
+    'desc'        => include('payment_history/voided_credit.html', $cust_credit_void, %opt ),
+    'void_credit' => $cust_credit_void->amount,
+  };
 }
 
 #declined payments

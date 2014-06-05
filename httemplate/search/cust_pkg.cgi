@@ -9,6 +9,7 @@
                                      emt('Package'),
                                      emt('Class'),
                                      emt('Status'),
+                                     emt('Sales Person'),
                                      emt('Ordered by'),
                                      emt('Setup'),
                                      emt('Base Recur'),
@@ -35,6 +36,7 @@
                     sub { $_[0]->pkg; },
                     'classname',
                     sub { ucfirst(shift->status); },
+                    'salesperson',
                     'otaker',
                     sub { sprintf( $money_char.'%.2f',
                                    shift->part_pkg->option('setup_fee'),
@@ -99,17 +101,19 @@
                     '',
                     '',
                     '',
+                    '',
                     FS::UI::Web::cust_colors(),
                     '',
                   ],
-                  'style' => [ '', '', '', '', 'b', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
+                  'style' => [ '', '', '', '', 'b', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
                                FS::UI::Web::cust_styles() ],
                   'size'  => [ '', '', '', '', '-1' ],
-                  'align' => 'rrlcccrrlrrrrrrrrrrl'. FS::UI::Web::cust_aligns(). 'r',
+                  'align' => 'rrlccccrrlrrrrrrrrrrl'. FS::UI::Web::cust_aligns(). 'r',
                   'links' => [
                     $link,
                     $link,
                     $link,
+                    '',
                     '',
                     '',
                     '',
@@ -152,8 +156,11 @@ my %search_hash = ();
 $search_hash{'query'} = $cgi->keywords;
 
 #scalars
-for (qw( agentnum custnum magic status custom cust_fields pkgbatch )) {
-  $search_hash{$_} = $cgi->param($_) if $cgi->param($_);
+for (qw( agentnum cust_status cust_main_salesnum salesnum custnum magic status
+         custom cust_fields pkgbatch
+    )) 
+{
+  $search_hash{$_} = $cgi->param($_) if length($cgi->param($_));
 }
 
 #arrays
@@ -167,6 +174,10 @@ for my $param (qw( censustract censustract2 )) {
   $search_hash{$param} = $cgi->param($param) || ''
     if grep { $_ eq $param } $cgi->param;
 }
+
+#location flags (checkboxes)
+my @loc = grep /^\w+$/, $cgi->param('loc');
+$search_hash{"location_$_"} = 1 foreach @loc;
 
 my $report_option = $cgi->param('report_option');
 $search_hash{report_option} = $report_option if $report_option;

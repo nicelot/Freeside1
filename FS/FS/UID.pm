@@ -1,10 +1,10 @@
 package FS::UID;
 
 use strict;
-use vars qw(
-  @ISA @EXPORT_OK $DEBUG $me $cgi $freeside_uid $conf_dir $cache_dir
-  $secrets $datasrc $db_user $db_pass $schema $dbh $driver_name
-  $AutoCommit %callback @callback $callback_hack $use_confcompat
+our (
+  @ISA, @EXPORT_OK, $DEBUG, $me, $cgi, $freeside_uid, $conf_dir, $cache_dir,
+  $secrets, $datasrc, $db_user, $db_pass, $schema, $dbh, $driver_name,
+  $olddbh, $AutoCommit, %callback, @callback, $callback_hack, $use_confcompat,
 );
 use subs qw( getsecrets );
 use Exporter;
@@ -12,11 +12,14 @@ use Carp qw( carp croak cluck confess );
 use DBI;
 use IO::File;
 use FS::CurrentUser;
+use File::Slurp;  # Exports read_file
+use JSON;
+use Try::Tiny;
 
 @ISA = qw(Exporter);
 @EXPORT_OK = qw( checkeuid checkruid cgi setcgi adminsuidsetup forksuidsetup
                  preuser_setup
-                 getotaker dbh datasrc getsecrets driver_name myconnect
+                 getotaker dbh olddbh datasrc getsecrets driver_name myconnect
                  use_confcompat
                );
 
@@ -31,6 +34,8 @@ $cache_dir = "%%%FREESIDE_CACHE%%%";
 $AutoCommit = 1; #ours, not DBI
 $use_confcompat = 1;
 $callback_hack = 0;
+
+our $cached;
 
 =head1 NAME
 
@@ -173,24 +178,35 @@ sub callback_setup {
 }
 
 sub myconnect {
+<<<<<<< HEAD
+  my $options = shift || {};
+  my $handle = DBI->connect( getsecrets($options), 
+    { 'AutoCommit'         => 0,
+      'ChopBlanks'         => 1,
+      'ShowErrorStatement' => 1,
+      'pg_enable_utf8'     => 1,
+      #'mysql_enable_utf8'  => 1,
+    })
+=======
   my $handle = DBI->connect( getsecrets(), { 'AutoCommit'         => 0,
-                                             'ChopBlanks'         => 1,
-                                             'ShowErrorStatement' => 1,
-                                             'pg_enable_utf8'     => 1,
-                                             #'mysql_enable_utf8'  => 1,
-                                           }
-                           )
+                                            'ChopBlanks'         => 1,
+                                            'ShowErrorStatement' => 1,
+                                            'pg_enable_utf8'     => 1,
+                                            'mysql_enable_utf8'  => 1,
+                                          }
+                          )
+>>>>>>> 9d0e461b89411c22fd6848384c4563b2dbe1c64d
     or die "DBI->connect error: $DBI::errstr\n";
 
-  if ( $schema ) {
-    use DBIx::DBSchema::_util qw(_load_driver ); #quelle hack
-    my $driver = _load_driver($handle);
-    if ( $driver =~ /^Pg/ ) {
-      no warnings 'redefine';
-      eval "sub DBIx::DBSchema::DBD::${driver}::default_db_schema {'$schema'}";
-      die $@ if $@;
+    if ( $schema ) {
+        use DBIx::DBSchema::_util qw(_load_driver ); #quelle hack
+        my $driver = _load_driver($handle);
+        if ( $driver =~ /^Pg/ ) {
+            no warnings 'redefine';
+            eval "sub DBIx::DBSchema::DBD::${driver}::default_db_schema {'$schema'}";
+            die $@ if $@;
+        }
     }
-  }
 
   $handle;
 }
@@ -246,7 +262,25 @@ Returns the DBI database handle.
 =cut
 
 sub dbh {
-  $dbh;
+    my $conn_name = shift;
+
+    if ($conn_name) {
+        $olddbh = $dbh;
+        $dbh = myconnect($conn_name);
+    }
+    return $dbh;
+}
+
+=item olddbh 
+
+Returns and restores the old DBI database handle
+
+=cut
+
+sub olddbh {
+    $dbh = $olddbh;
+
+    return $dbh;
 }
 
 =item datasrc
@@ -314,10 +348,20 @@ the `/usr/local/etc/freeside/secrets' file.
 =cut
 
 sub getsecrets {
+  my $options = shift || { };
 
-  ($datasrc, $db_user, $db_pass, $schema) = 
-    map { /^(.*)$/; $1 } readline(new IO::File "$conf_dir/secrets")
-      or die "Can't get secrets: $conf_dir/secrets: $!\n";
+  $options->{'ServerName'} ||= 'main';
+
+  my $secrets = Config::General->new("$conf_dir/secrets")
+    or die "Can't get secrets: $conf_dir/secrets: $!\n";
+
+  die "Could not find a $options->{'ServerName'} configuration. Is secrets file not in Config::General format?"
+    unless {$secrets->getall}->{'server'}->{$options->{'ServerName'}};
+
+  ($datasrc, $db_user, $db_pass, $schema) = map {
+    {$secrets->getall}->{'server'}->{$options->{'ServerName'}}->{$_}}
+    qw/DSN Username Password Schema/;
+
   undef $driver_name;
 
   ($datasrc, $db_user, $db_pass);
@@ -331,6 +375,30 @@ Returns true whenever we should use 1.7 configuration compatibility.
 
 sub use_confcompat {
   $use_confcompat;
+}
+
+=item get_cached 
+
+Returns a cache object if configured
+
+=cut
+
+sub get_cached {
+  return $cached ||= do{
+    my $conf = new FS::Conf;
+    if($conf->exists('memcache')){
+      require Cache::Memcached::Fast;
+      $cached = new Cache::Memcached::Fast {
+      #servers   => [ $conf->config( 'memcache-server' ) ],
+        servers => ['localhost:11211'],
+        namespace => 'FS:',
+        close_on_error => 1,
+        max_failures => 3,
+        failure_timeout => 2,
+      };  #TODO: OR DIE
+    }
+    $cached;
+  }
 }
 
 =back

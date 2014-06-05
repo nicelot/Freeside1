@@ -64,9 +64,14 @@ sub payinfo {
 
   if ( defined($payinfo) ) {
     $self->setfield('payinfo', $payinfo);
-    $self->paymask($self->mask_payinfo) unless $payinfo =~ /^99\d{14}$/; #token
+    $self->paymask($self->mask_payinfo) unless $payinfo =~ /^(99\d{14}|card_token:.+)$/; #token
   } else {
-    $self->getfield('payinfo');
+    if ($self->{'decrypted'}->{'payinfo'}) {
+      $self->getfield('payinfo');
+    } else {
+      $self->{'decrypted'}->{'payinfo'} = 1;
+      $self->setfield('payinfo',$self->decrypt($self->getfield('payinfo')));
+    }
   }
 }
 
@@ -76,20 +81,21 @@ Card Verification Value, "CVV2" (also known as CVC2 or CID), the 3 or 4 digit nu
 
 =cut
 
+#this prevents encrypting empty values on insert?
 sub paycvv {
   my($self,$paycvv) = @_;
-  # This is only allowed in cust_main... Even then it really shouldn't be stored...
-  if ($self->table eq 'cust_main') {
-    if ( defined($paycvv) ) {
-      $self->setfield('paycvv', $paycvv); # This is okay since we are the 'setter'
-    } else {
-      $paycvv = $self->getfield('paycvv'); # This is okay since we are the 'getter'
-      return $paycvv;
-    }
+  # This is only allowed in cust_payby (formerly cust_main)
+  #  It shouldn't be stored longer than necessary to run the first transaction
+  if ( defined($paycvv) ) {
+    $self->setfield('paycvv', $paycvv);
   } else {
-#    warn "This doesn't work for other tables besides cust_main
-    '';
-  } 
+    if ($self->{'decrypted'}->{'paycvv'}) {
+      $self->getfield('paycvv');
+    } else {
+      $self->{'decrypted'}->{'paycvv'} = 1;
+      $self->setfield('paycvv',$self->decrypt($self->getfield('paycvv')));
+    }
+  }
 }
 
 =item paymask
@@ -127,7 +133,7 @@ sub mask_payinfo {
   my $payinfo = scalar(@_) ? shift : $self->payinfo;
 
   # Check to see if it's encrypted...
-  if ( $self->is_encrypted($payinfo) ) {
+  if ( ref($self) && $self->is_encrypted($payinfo) ) {
     return 'N/A';
   } elsif ( $payinfo =~ /^99\d{14}$/ || $payinfo eq 'N/A' ) { #token
     return 'N/A (tokenized)'; #?
@@ -203,6 +209,8 @@ sub payinfo_check {
     my $payinfo = $self->payinfo;
     if ( $ignore_masked_payinfo and $self->mask_payinfo eq $self->payinfo ) {
       # allow it
+    } elsif ( $payinfo =~ /^card_token:./) {
+      # allow it
     } else {
       $payinfo =~ s/\D//g;
       $self->payinfo($payinfo);
@@ -230,7 +238,7 @@ sub payinfo_check {
 
 }
 
-=item payby_payinfo_pretty
+=item payby_payinfo_pretty [ LOCALE ]
 
 Returns payment method and information (suitably masked, if applicable) as
 a human-readable string, such as:
@@ -245,22 +253,25 @@ or
 
 sub payby_payinfo_pretty {
   my $self = shift;
+  my $locale = shift;
+  my $lh = FS::L10N->get_handle($locale);
   if ( $self->payby eq 'CARD' ) {
-    'Card #'. $self->paymask;
+    $lh->maketext('Card #') . $self->paymask;
   } elsif ( $self->payby eq 'CHEK' ) {
-    'E-check acct#'. $self->payinfo;
+    $lh->maketext('E-check acct#') . $self->payinfo;
   } elsif ( $self->payby eq 'BILL' ) {
-    'Check #'. $self->payinfo;
+    $lh->maketext('Check #') . $self->payinfo;
   } elsif ( $self->payby eq 'PREP' ) {
-    'Prepaid card #'. $self->payinfo;
+    $lh->maketext('Prepaid card #') . $self->payinfo;
   } elsif ( $self->payby eq 'CASH' ) {
-    'Cash '. $self->payinfo;
+    $lh->maketext('Cash') . ' ' . $self->payinfo;
   } elsif ( $self->payby eq 'WEST' ) {
-    'Western Union'; #. $self->payinfo;
+    # does Western Union localize their name?
+    $lh->maketext('Western Union');
   } elsif ( $self->payby eq 'MCRD' ) {
-    'Manual credit card'; #. $self->payinfo;
+    $lh->maketext('Manual credit card');
   } elsif ( $self->payby eq 'PPAL' ) {
-    'PayPal transaction#' . $self->order_number;
+    $lh->maketext('PayPal transaction#') . $self->order_number;
   } else {
     $self->payby. ' '. $self->payinfo;
   }
@@ -288,6 +299,33 @@ sub payinfo_used {
   ;
 
   return 0;
+}
+
+=item display_status
+
+For transactions that have both 'status' and 'failure_status', shows the
+status in a single, display-friendly string.
+
+=cut
+
+sub display_status {
+  my $self = shift;
+  my %status = (
+    'done'        => 'Approved',
+    'expired'     => 'Card Expired',
+    'stolen'      => 'Lost/Stolen',
+    'pickup'      => 'Pick Up Card',
+    'nsf'         => 'Insufficient Funds',
+    'inactive'    => 'Inactive Account',
+    'blacklisted' => 'Blacklisted',
+    'declined'    => 'Declined',
+    'approved'    => 'Approved',
+  );
+  if ( $self->failure_status ) {
+    return $status{$self->failure_status};
+  } else {
+    return $status{$self->status};
+  }
 }
 
 =back

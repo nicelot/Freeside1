@@ -92,6 +92,8 @@ following fields are currently supported:
 
 =item dst_ip_addr - Destination IP address (same)
 
+=item dst_term - Terminating destination number (if different from dst)
+
 =item startdate - Start of call (UNIX-style integer timestamp)
 
 =item answerdate - Answer time of call (UNIX-style integer timestamp)
@@ -194,6 +196,7 @@ sub table_info {
         #'lastdata'              => '',
         'src_ip_addr'           => 'Source IP',
         'dst_ip_addr'           => 'Dest. IP',
+        'dst_term'              => 'Termination dest.',
         'startdate'             => 'Start date',
         'answerdate'            => 'Answer date',
         'enddate'               => 'End date',
@@ -901,7 +904,7 @@ sub rate_prefix {
       #${$opt{region_group_included_min}} -= $minutes 
       #    if $region_group && $rate_detail->region_group;
 
-      if ( $included_min->{$regionnum}{$ratetimenum} > $minutes ) {
+      if ( $included_min->{$regionnum}{$ratetimenum} >= $minutes ) {
         $charge_sec = 0;
         $included_min->{$regionnum}{$ratetimenum} -= $minutes;
       } else {
@@ -932,8 +935,12 @@ sub rate_prefix {
       }
 
                            #should preserve (display?) this
-      my $charge_min = ( $charge_sec - $conn_seconds ) / 60;
-      $charge += ($rate_detail->min_charge * $charge_min) if $charge_min > 0; #still not rounded
+      if ( $granularity == 0 ) { # per call rate
+        $charge += $rate_detail->min_charge;
+      } else {
+        my $charge_min = ( $charge_sec - $conn_seconds ) / 60;
+        $charge += ($rate_detail->min_charge * $charge_min) if $charge_min > 0; #still not rounded
+      }
 
     }
 
@@ -951,9 +958,15 @@ sub rate_prefix {
   # this is why we need regionnum/rate_region....
   warn "  (rate region $rate_region)\n" if $DEBUG;
 
+  # NOW round it.
+  my $rounding = $part_pkg->option_cacheable('rounding') || 2;
+  my $sprintformat = '%.'. $rounding. 'f';
+  my $roundup = 10**(-3-$rounding);
+  my $price = sprintf($sprintformat, $charge + $roundup);
+
   $self->set_status_and_rated_price(
     'rated',
-    sprintf('%.2f', $charge + 0.000001), # NOW round it.
+    $price,
     $opt{'svcnum'},
     'rated_pretty_dst'    => $pretty_dst,
     'rated_regionname'    => $rate_region->regionname,

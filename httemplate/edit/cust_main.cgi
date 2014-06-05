@@ -73,6 +73,7 @@
     ><% mt('same as billing address') |h %>
     <DIV CLASS="fsinnerbox">
       <TABLE ID="table_ship_location" WIDTH="100%">
+      <& cust_main/before_ship_location.html, $cust_main &>
       <& /elements/location.html,
           object => $cust_main->ship_location,
           prefix => 'ship_',
@@ -202,6 +203,7 @@ my $prospectnum = '';
 my $locationnum = '';
 my $same = '';
 
+$m->comp('/elements/handle_uri_query', 'secure'=>1);
 
 if ( $cgi->param('error') ) {
 

@@ -16,6 +16,9 @@ use FS::cust_bill;
 # 3 is even more information including possibly sensitive data
 $DEBUG = 0;
 
+#@encrypted_fields = ('payinfo');
+sub nohistory_fields { ('payinfo'); }
+
 =head1 NAME
 
 FS::cust_pay_batch - Object methods for batch cards
@@ -83,6 +86,9 @@ following fields are currently supported:
 =item status - 'Approved' or 'Declined'
 
 =item error_message - the error returned by the gateway if any
+
+=item failure_status - the normalized L<Business::BatchPayment> failure 
+status, if any
 
 =back
 
@@ -340,20 +346,24 @@ sub approve {
   return;
 }
 
-=item decline [ REASON ]
+=item decline [ REASON [ STATUS ] ]
 
 Decline this payment.  This will replace the existing record with the 
 same paybatchnum, set its status to 'Declined', and run collection events
 as appropriate.  This should only be called from the batch import process.
 
 REASON is a string description of the decline reason, defaulting to 
-'Returned payment'.
+'Returned payment', and will go into the "error_message" field.
+
+STATUS is a normalized failure status defined by L<Business::BatchPayment>,
+and will go into the "failure_status" field.
 
 =cut
 
 sub decline {
   my $new = shift;
   my $reason = shift || 'Returned payment';
+  my $failure_status = shift || '';
   #my $conf = new FS::Conf;
 
   my $paybatchnum = $new->paybatchnum;
@@ -390,6 +400,7 @@ sub decline {
   } # !$old->status
   $new->status('Declined');
   $new->error_message($reason);
+  $new->failure_status($failure_status);
   my $error = $new->replace($old);
   if ( $error ) {
     return "error updating status of paybatchnum $paybatchnum: $error\n";

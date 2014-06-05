@@ -116,6 +116,9 @@ Example:
     # display of primary key, no submit button, no html_foot, no footer)
     'embed' => $object, #need to pass the object
 
+    #don't show the primary key label and value
+    'no_pkey_display' => 1,
+
     ###
     # HTML callbacks
     ###
@@ -236,13 +239,17 @@ Example:
   <INPUT TYPE="hidden" NAME="svcdb" VALUE="<% $table %>">
   <INPUT TYPE="hidden" NAME="<% $pkey %>" VALUE="<% $clone ? '' : $object->$pkey() %>">
 
-  <FONT SIZE="+1"><B>
-  <% ( $opt{labels} && exists $opt{labels}->{$pkey} )
-        ? $opt{labels}->{$pkey}
-        : $pkey
-  %>
-  </B></FONT>
-  #<% ( !$clone && $object->$pkey() ) || "(NEW)" %>
+%   unless ( $opt{'no_pkey_display'} ) {
+
+      <FONT SIZE="+1"><B>
+      <% ( $opt{labels} && exists $opt{labels}->{$pkey} )
+            ? $opt{labels}->{$pkey}
+            : $pkey
+      %>
+      </B></FONT>
+      #<% ( !$clone && $object->$pkey() ) || "(NEW)" %>
+
+%   }
 
 % }
 
@@ -282,6 +289,7 @@ Example:
 %     #text and derivitives
 %     'size'          => $f->{'size'},
 %     'maxlength'     => $f->{'maxlength'},
+%     'prefix'        => $f->{'prefix'},
 %     'postfix'       => $f->{'postfix'},
 %
 %     #textarea
@@ -321,15 +329,16 @@ Example:
 %   $include_common{$_} = $f->{$_} foreach grep exists($f->{$_}),
 %     qw( js_only html_only select_only layers_only cell_style ),#selectlayers,?
 %     qw( empty_label ),                                   # select-*
-%     qw( value_col compare_sub ),                         # select-table
+%     qw( value_col compare_sub order_by ),                # select-table
 %     qw( table name_col ),                           #(select,checkboxes)-table
 %     qw( target_table link_table ),                       #checkboxes-table
 %     qw( hashref agent_virt agent_null agent_null_right ),#*-table
 %     qw( formatted_value ),                               #fixed
 %     qw( country ),                                       #select-country
-%     qw( width height ),                                  #htmlarea
+%     qw( width height config ),                           #htmlarea
 %     qw( alt_format ),                                    #select-cust_location
 %     qw( classnum ),                                   # select-inventory_item
+%     qw( aligned ),                                    # columnstart
 %   ;
 %
 %   #select-table
@@ -518,7 +527,7 @@ Example:
 %     if ( $f->{curr_value_callback} ) {
 %       $curr_value = &{ $f->{curr_value_callback} }( $cgi, $object, $field ),
 %     } else {
-%       $curr_value = $object->$field();
+%       $curr_value = $object->$field() if $field;
 %     }
 %     $curr_value = &{ $opt{'value_callback'} }( $f->{'field'}, $curr_value )
 %       if $opt{'value_callback'} && $mode ne 'error';

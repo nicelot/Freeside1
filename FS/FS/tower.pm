@@ -59,8 +59,6 @@ points to.  You can ask the object for a copy with the I<hash> method.
 
 =cut
 
-# the new method can be inherited from FS::Record, if a table method is defined
-
 sub table { 'tower'; }
 
 =item insert
@@ -68,22 +66,14 @@ sub table { 'tower'; }
 Adds this record to the database.  If there is an error, returns the error,
 otherwise returns false.
 
-=cut
-
 =item delete
 
 Delete this record from the database.
-
-=cut
 
 =item replace OLD_RECORD
 
 Replaces the OLD_RECORD with this one in the database.  If there is an error,
 returns the error, otherwise returns false.
-
-=cut
-
-# the replace method can be inherited from FS::Record
 
 =item check
 
@@ -93,9 +83,6 @@ and replace methods.
 
 =cut
 
-# the check method should currently be supplied - FS::Record contains some
-# data checking routines
-
 sub check {
   my $self = shift;
 
@@ -103,6 +90,13 @@ sub check {
     $self->ut_numbern('towernum')
     || $self->ut_text('towername')
     || $self->ut_enum('disabled', [ '', 'Y' ])
+    || $self->ut_coordn('latitude')
+    || $self->ut_coordn('longitude')
+    || $self->ut_enum('coord_auto', [ '', 'Y' ])
+    || $self->ut_floatn('altitude')
+    || $self->ut_floatn('height')
+    || $self->ut_floatn('veg_height')
+    || $self->ut_alphan('color')
   ;
   return $error if $error;
 

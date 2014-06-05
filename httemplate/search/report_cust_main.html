@@ -14,6 +14,13 @@
                   'disable_empty' => 0,
     &>
 
+    <& /elements/tr-select-sales.html,
+                  'curr_value'    => scalar($cgi->param('salesnum')),
+                  'pre_options'   => [ '' => 'all',
+                                       0  => '(none)', ],
+                  'disable_empty' => 1,
+    &>
+
     <& /elements/tr-select-cust_main-status.html,
                   'label' => emt('Status'),
     &>
@@ -163,20 +170,6 @@
                   label   => emt('Current balance'),
                   field   => 'current_balance',
     &>
-
-    <TR>
-      <TD ALIGN="right" VALIGN="center"><% mt('Without census tract') |h %></TD>
-        <TD><INPUT TYPE="checkbox" NAME="no_censustract"></TD>
-    </TR>
-
-%   if ( $conf->exists('enable_taxproducts') ) {
-
-      <TR>
-        <TD ALIGN="right" VALIGN="center"><% mt('With hardcoded tax location') |h %></TD>
-          <TD><INPUT TYPE="checkbox" NAME="with_geocode"></TD>
-      </TR>
-
-%   }
 
     <TR>
       <TD ALIGN="right" VALIGN="center"><% mt('With email address(es)') |h %></TD>

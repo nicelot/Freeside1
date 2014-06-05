@@ -108,12 +108,20 @@ Interface
     </TD>
   </TR>
 
+% if ( FS::Conf->new->exists('enable_fuzzy_on_exact') ) {
+
+  <INPUT TYPE="hidden" NAME="enable_fuzzy_on_exact" VALUE="<% $curuser->option('enable_fuzzy_on_exact') ? 1 : 0 %>">
+
+% } else {
+
  <TR>
     <TH ALIGN="right" COLSPAN=1>Enable approximate customer searching <BR>even when an exact match is found: </TH>
     <TD ALIGN="left" COLSPAN=2>
       <INPUT TYPE="checkbox" NAME="enable_fuzzy_on_exact" VALUE="1" <% $curuser->option('enable_fuzzy_on_exact') ? 'CHECKED' : '' %>>
     </TD>
   </TR>
+
+% }
 
   <TR>
     <TH ALIGN="right" COLSPAN=1>Disable HTML editor for customer notes: </TH>
@@ -126,6 +134,13 @@ Interface
     <TH ALIGN="right" COLSPAN=1>Disable submission on [Enter] key - one-time charges: </TH>
     <TD ALIGN="left" COLSPAN=2>
       <INPUT TYPE="checkbox" NAME="disable_enter_submit_onetimecharge" VALUE="1" <% $curuser->option('disable_enter_submit_onetimecharge') ? 'CHECKED' : '' %>>
+    </TD>
+  </TR>
+
+  <TR>
+    <TH ALIGN="right">Don't copy MAC address delimiters to clipboard</TH>
+    <TD ALIGN="left" COLSPAN=2>
+      <INPUT TYPE="checkbox" NAME="enable_mask_clipboard_hack" VALUE="1" <% $curuser->option('enable_mask_clipboard_hack') ? 'CHECKED' : '' %>>
     </TD>
   </TR>
 

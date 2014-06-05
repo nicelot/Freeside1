@@ -8,7 +8,7 @@ my( $cust_refund, %opt ) = @_;
 my $curuser = $FS::CurrentUser::CurrentUser;
 
 my $payby = $cust_refund->payby;
-my $payinfo = $payby eq 'CARD'
+my $payinfo = $payby =~ m/CARD|TOKN/
                 ? $cust_refund->paymask
                 : $cust_refund->payinfo;
 $payby = translate_payby_refund($payby,$payinfo);

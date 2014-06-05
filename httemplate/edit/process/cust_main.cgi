@@ -1,7 +1,7 @@
 % if ( $error ) {
 %   $cgi->param('error', $error);
-%
-<% $cgi->redirect(popurl(2). "cust_main.cgi?". $cgi->query_string ) %>
+%   my $query = $m->scomp('/elements/create_uri_query', 'secure'=>1);
+<% $cgi->redirect(popurl(2). "cust_main.cgi?$query" ) %>
 %
 % } else { 
 %
@@ -11,7 +11,7 @@
 <%once>
 
 my $me = '[edit/process/cust_main.cgi]';
-my $DEBUG = 1;
+my $DEBUG = 0;
 
 </%once>
 <%init>
@@ -213,6 +213,7 @@ if ( $new->custnum eq '' or $duplicate_of ) {
       #later         'custnum' => $custnum,
       'pkgpart'     => $pkgpart,
       'locationnum' => scalar($cgi->param('locationnum')),
+      'salesnum'    => scalar($cgi->param('salesnum')),
     } );
 
 
