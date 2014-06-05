@@ -1008,7 +1008,7 @@ sub tables_hashref {
 
     'cust_bill_pkg_detail' => {
       'columns' => [
-        'detailnum', 'serial', '', '', '', '', 
+        'detailnum', 'serial', '', '', '', '',
         'billpkgnum', 'int', 'NULL', '', '', '',        # should not be nullable
         'pkgnum',  'int', 'NULL', '', '', '',           # deprecated
         'invnum',  'int', 'NULL', '', '', '',           # deprecated
@@ -1617,6 +1617,8 @@ sub tables_hashref {
                           [ 'referral_custnum' ],
                           [ 'payby' ], [ 'paydate' ],
                           [ 'archived' ],
+                          [ 'ship_locationnum' ],
+                          [ 'bill_locationnum' ],
                         ],
       'foreign_keys' => [
                           { columns    => [ 'agentnum' ],
@@ -2232,7 +2234,7 @@ sub tables_hashref {
 
         'pkgnum', 'int', 'NULL', '', '', '', #desired pkgnum for pkg-balances
         'status',       'varchar',     '', $char_d, '', '', 
-        'session_id',   'varchar', 'NULL', $char_d, '', '', #only need 32
+        'session_id',   'varchar', 'NULL', 1024, '', '', # SHA-512-hex
         'statustext',   'text',    'NULL',  '', '', '', 
         'gatewaynum',   'int',     'NULL',  '', '', '',
         #'cust_balance', @money_type,            '', '',
@@ -2734,7 +2736,7 @@ sub tables_hashref {
       'columns' => [
         'pkgusagenum', 'serial', '', '', '', '',
         'pkgnum',         'int', '', '', '', '',
-        'minutes',        'int', '', '', '', '',
+        'minutes',        'double precision', '', '', '', '',
         'pkgusagepart',   'int', '', '', '', '',
       ],
       'primary_key'  => 'pkgusagenum',
@@ -2755,7 +2757,7 @@ sub tables_hashref {
         'cdrusagenum', 'bigserial', '', '', '', '',
         'acctid',      'bigint',    '', '', '', '',
         'pkgusagenum', 'int',       '', '', '', '',
-        'minutes',     'int',       '', '', '', '',
+        'minutes',     'double precision',       '', '', '', '',
       ],
       'primary_key'  => 'cdrusagenum',
       'unique'       => [],
@@ -4501,6 +4503,7 @@ sub tables_hashref {
         'rssi',                    'int', 'NULL',        '', '', '',
         'suid',                    'int', 'NULL',        '', '', '',
         'shared_svcnum',           'int', 'NULL',        '', '', '',
+        'serviceid',           'varchar', 'NULL',        64, '', '',#srvexport/reportfields
       ],
       'primary_key'  => 'svcnum',
       'unique'       => [ [ 'ip_addr' ], [ 'mac_addr' ] ],
@@ -4546,16 +4549,16 @@ sub tables_hashref {
 
     'tower_sector' => {
       'columns' => [
-        'sectornum',   'serial',     '',      '', '', '',
-        'towernum',       'int',     '',      '', '', '',
-        'sectorname', 'varchar',     '', $char_d, '', '',
-        'ip_addr',    'varchar', 'NULL',      15, '', '',
-        'height',     'decimal', 'NULL',      '', '', '', 
-        'freq_mhz',       'int', 'NULL',      '', '', '',
-        'direction',      'int', 'NULL',      '', '', '',
-        'width',          'int', 'NULL',      '', '', '',
+        'sectornum',     'serial',     '',      '', '', '',
+        'towernum',         'int',     '',      '', '', '',
+        'sectorname',   'varchar',     '', $char_d, '', '',
+        'ip_addr',      'varchar', 'NULL',      15, '', '',
+        'height',       'decimal', 'NULL',      '', '', '', 
+        'freq_mhz',         'int', 'NULL',      '', '', '',
+        'direction',        'int', 'NULL',      '', '', '',
+        'width',            'int', 'NULL',      '', '', '',
         #downtilt etc? rfpath has profile files for devices/antennas you upload?
-        'range',      'decimal', 'NULL',      '', '', '',  #?
+        'sector_range', 'decimal', 'NULL',      '', '', '',  #?
       ],
       'primary_key'  => 'sectornum',
       'unique'       => [ [ 'towernum', 'sectorname' ], [ 'ip_addr' ], ],
@@ -4711,7 +4714,7 @@ sub tables_hashref {
       'columns' => [
         'pkgusagepart', 'serial',   '', '', '', '',
         'pkgpart',  'int',      '', '', '', '',
-        'minutes',  'int',      '', '', '', '',
+        'minutes',  'double precision',      '', '', '', '',
         'priority', 'int',  'NULL', '', '', '',
         'shared',   'char', 'NULL',  1, '', '',
         'rollover', 'char', 'NULL',  1, '', '',
@@ -4748,12 +4751,18 @@ sub tables_hashref {
 
     'rate' => {
       'columns' => [
-        'ratenum',  'serial', '', '', '', '', 
-        'ratename', 'varchar', '', $char_d, '', '', 
+        'ratenum',   'serial',     '',      '', '', '', 
+        'ratename', 'varchar',     '', $char_d, '', '', 
+        'agentnum',     'int', 'NULL',      '', '', '',
       ],
       'primary_key' => 'ratenum',
       'unique'      => [],
       'index'       => [],
+      'foreign_keys' => [
+                          { columns    => [ 'agentnum' ],
+                            table      => 'agent',
+                          },
+                        ],
     },
 
     'rate_detail' => {
@@ -4764,13 +4773,15 @@ sub tables_hashref {
         'dest_regionnum',  'int',     '',     '',      '', '', 
         'min_included',    'int',     '',     '',      '', '', 
         'conn_charge',     'decimal', '', '10,4', '0.0000', '',
+        'conn_cost',       'decimal', '', '10,4', '0.0000', '',
         'conn_sec',        'int',     '',     '',      '0', '',
         'min_charge',      'decimal', '', '10,5',       '', '',
+        'min_cost',        'decimal', '', '10,5','0.00000', '',
         'sec_granularity', 'int',     '',     '',       '', '', 
         'ratetimenum',     'int', 'NULL',     '',       '', '',
         'classnum',        'int', 'NULL',     '',       '', '', 
         'cdrtypenum',      'int', 'NULL',     '',       '', '',
-        'region_group', 'char', 'NULL',        1,       '', '', 
+        'region_group',   'char', 'NULL',      1,       '', '', 
       ],
       'primary_key'  => 'ratedetailnum',
       'unique'       => [ [ 'ratenum', 'orig_regionnum', 'dest_regionnum' ] ],

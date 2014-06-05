@@ -570,7 +570,10 @@ sub bill {
       my $object = $event_fee->cust_event->cust_X;
       my $part_fee = $event_fee->part_fee;
       my $cust_bill;
-      if ( $object->isa('FS::cust_main') or $object->isa('FS::cust_pkg') ) {
+      if ( $object->isa('FS::cust_main')
+           or $object->isa('FS::cust_pkg')
+           or $object->isa('FS::cust_pay_batch') )
+      {
         # Not the real cust_bill object that will be inserted--in particular
         # there are no taxes yet.  If you want to charge a fee on the total 
         # invoice amount including taxes, you have to put the fee on the next
@@ -1124,10 +1127,16 @@ sub _make_lines {
   my $recur_billed_amount = 0;
   my $sdate;
   if (     ! $cust_pkg->start_date
-       and ( ! $cust_pkg->susp || $cust_pkg->option('suspend_bill',1)
-                               || ( $part_pkg->option('suspend_bill', 1) )
-                                     && ! $cust_pkg->option('no_suspend_bill',1)
-                                  )
+       and 
+           ( ! $cust_pkg->susp
+               || ( $cust_pkg->susp != $cust_pkg->order_date
+                      && (    $cust_pkg->option('suspend_bill',1)
+                           || ( $part_pkg->option('suspend_bill', 1)
+                                 && ! $cust_pkg->option('no_suspend_bill',1)
+                              )
+                         )
+                  )
+           )
        and
             ( $part_pkg->freq ne '0' && ( $cust_pkg->bill || 0 ) <= $cmp_time )
          || ( $part_pkg->plan eq 'voip_cdr'

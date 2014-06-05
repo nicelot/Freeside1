@@ -651,47 +651,6 @@ sub cust_suspend_if_balance_over {
   }
 }
 
-=item cust_credit
-
-Depreciated.  See the cust_credited method.
-
- #Returns a list consisting of the total previous credited (see
- #L<FS::cust_credit>) and unapplied for this customer, followed by the previous
- #outstanding credits (FS::cust_credit objects).
-
-=cut
-
-sub cust_credit {
-  use Carp;
-  croak "FS::cust_bill->cust_credit depreciated; see ".
-        "FS::cust_bill->cust_credit_bill";
-  #my $self = shift;
-  #my $total = 0;
-  #my @cust_credit = sort { $a->_date <=> $b->_date }
-  #  grep { $_->credited != 0 && $_->_date < $self->_date }
-  #    qsearch('cust_credit', { 'custnum' => $self->custnum } )
-  #;
-  #foreach (@cust_credit) { $total += $_->credited; }
-  #$total, @cust_credit;
-}
-
-=item cust_pay
-
-Depreciated.  See the cust_bill_pay method.
-
-#Returns all payments (see L<FS::cust_pay>) for this invoice.
-
-=cut
-
-sub cust_pay {
-  use Carp;
-  croak "FS::cust_bill->cust_pay depreciated; see FS::cust_bill->cust_bill_pay";
-  #my $self = shift;
-  #sort { $a->_date <=> $b->_date }
-  #  qsearch( 'cust_pay', { 'invnum' => $self->invnum } )
-  #;
-}
-
 =item cust_bill_pay
 
 Returns all payment applications (see L<FS::cust_bill_pay>) for this invoice.
@@ -2960,6 +2919,49 @@ sub _items_svc_phone_sections {
 
 }
 
+=sub _items_usage_class_summary OPTIONS
+
+Returns a list of detail items summarizing the usage charges on this 
+invoice.  Each one will have 'amount', 'description' (the usage charge name),
+and 'usage_classnum'.
+
+OPTIONS can include 'escape' (a function to escape the descriptions).
+
+=cut
+
+sub _items_usage_class_summary {
+  my $self = shift;
+  my %opt = @_;
+
+  my $escape = $opt{escape} || sub { $_[0] };
+  my $invnum = $self->invnum;
+  my @classes = qsearch({
+      'table'     => 'usage_class',
+      'select'    => 'classnum, classname, SUM(amount) AS amount',
+      'addl_from' => ' LEFT JOIN cust_bill_pkg_detail USING (classnum)' .
+                     ' LEFT JOIN cust_bill_pkg USING (billpkgnum)',
+      'extra_sql' => " WHERE cust_bill_pkg.invnum = $invnum".
+                     ' GROUP BY classnum, classname, weight'.
+                     ' HAVING (usage_class.disabled IS NULL OR SUM(amount) > 0)'.
+                     ' ORDER BY weight ASC',
+  });
+  my @l;
+  my $section = {
+    description   => &{$escape}($self->mt('Usage Summary')),
+    no_subtotal   => 1,
+    usage_section => 1,
+  };
+  foreach my $class (@classes) {
+    push @l, {
+      'description'     => &{$escape}($class->classname),
+      'amount'          => sprintf('%.2f', $class->amount),
+      'usage_classnum'  => $class->classnum,
+      'section'         => $section,
+    };
+  }
+  return @l;
+}
+
 sub _items_previous {
   my $self = shift;
   my $conf = $self->conf;
@@ -3358,6 +3360,22 @@ flag, return net invoices only
 
 =item newest_percust
 
+=item custnum
+
+Return only invoices belonging to that customer.
+
+=item cust_classnum
+
+Limit to that customer class (single value or arrayref).
+
+=item payby
+
+Limit to customers with that payment method (single value or arrayref).
+
+=item refnum
+
+Limit to customers with that advertising source.
+
 =back
 
 Note: validates all passed-in data; i.e. safe to use with unchecked CGI params.
@@ -3407,6 +3425,14 @@ sub search_sql_where {
                     ' )';
     }
 
+  }
+
+  #payby
+  if ( $param->{payby} ) {
+    my $payby = $param->{payby};
+    $payby = [ $payby ] unless ref $payby;
+    my $payby_in = join(',', map {dbh->quote($_)} @$payby);
+    push @search, "cust_main.payby IN($payby_in)" if length($payby_in);
   }
 
   #_date

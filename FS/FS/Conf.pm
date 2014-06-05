@@ -1092,6 +1092,7 @@ sub reason_type_options {
                        '%m/%d/%Y' => 'MM/DD/YYYY',
                        '%d/%m/%Y' => 'DD/MM/YYYY',
 		       '%Y/%m/%d' => 'YYYY/MM/DD',
+                       '%e %b %Y' => 'DD Mon YYYY',
                      ],
     'per_locale'  => 1,
   },
@@ -1608,6 +1609,13 @@ and customer address. Include units.',
   #  'per_agent'   => 1,
   #},
 
+  {
+    'key'         => 'usage_class_summary',
+    'section'     => 'invoicing',
+    'description' => 'Summarize total usage by usage class in a separate section.',
+    'type'        => 'checkbox',
+  },
+
   { 
     'key'         => 'usage_class_as_a_section',
     'section'     => 'invoicing',
@@ -1720,6 +1728,14 @@ and customer address. Include units.',
     'section'     => 'billing',
     'description' => 'Raw printer commands added to the end of postscript print jobs (evaluated as a double-quoted perl string - backslash escapes are available)',
     'type'        => 'text',
+  },
+
+  {
+    'key'         => 'papersize',
+    'section'     => 'billing',
+    'description' => 'Invoice paper size.  Default is "letter" (U.S. standard).  The LaTeX template must be configured to match this size.',
+    'type'        => 'select',
+    'select_enum' => [ qw(letter a4) ],
   },
 
   {
@@ -2700,7 +2716,7 @@ and customer address. Include units.',
   {
     'key'         => 'cvv-save',
     'section'     => 'billing',
-    'description' => 'Save CVV2 information after the initial transaction for the selected credit card types.  Enabling this option may be in violation of your merchant agreement(s), so please check them carefully before enabling this option for any credit card types.',
+    'description' => 'NOT RECOMMENDED.  Saves CVV2 information after the initial transaction for the selected credit card types.  Enabling this option is almost certainly in violation of your merchant agreement(s), so please check them carefully before enabling this option for any credit card types.',
     'type'        => 'selectmultiple',
     'select_enum' => \@card_types,
   },
@@ -2709,6 +2725,13 @@ and customer address. Include units.',
     'key'         => 'signup-require_cvv',
     'section'     => 'self-service',
     'description' => 'Require CVV for credit card signup.',
+    'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'selfservice-require_cvv',
+    'section'     => 'self-service',
+    'description' => 'Require CVV for credit card self-service payments, except for cards on-file.',
     'type'        => 'checkbox',
   },
 
@@ -2897,6 +2920,13 @@ and customer address. Include units.',
     'section'     => 'self-service',
     'description' => 'Template to use for password reset emails.',
     %msg_template_options,
+  },
+
+  {
+    'key'         => 'selfservice-password_change_oldpass',
+    'section'     => 'self-service',
+    'description' => 'Require old password to be entered again for password changes (in addition to being logged in), at the API level.',
+    'type'        => 'checkbox',
   },
 
   {
@@ -3487,6 +3517,13 @@ and customer address. Include units.',
   },
 
   {
+    'key'         => 'cust_pkg-hide_discontinued-part_svc',
+    'section'     => 'UI',
+    'description' => "In customer view, hide provisioned services which are no longer available in the package definition.  Not normally used except for very specific situations as it hides still-provisioned services.",
+    'type'        => 'checkbox',
+  },
+
+  {
     'key'         => 'svc_acct-edit_uid',
     'section'     => 'shell',
     'description' => 'Allow UID editing.',
@@ -3906,6 +3943,13 @@ and customer address. Include units.',
   },
 
   {
+    'key'         => 'cust_main-enable_order_package',
+    'section'     => 'UI',
+    'description' => 'Display order new package on the basic tab',
+    'type'        => 'checkbox',
+  },
+
+  {
     'key'         => 'cust_main-edit_calling_list_exempt',
     'section'     => 'UI',
     'description' => 'Display the "calling_list_exempt" checkbox on customer edit.',
@@ -4267,6 +4311,16 @@ and customer address. Include units.',
     'key'         => 'previous_balance-payments_since',
     'section'     => 'invoicing',
     'description' => 'Instead of showing payments (and credits) applied to the invoice, show those received since the previous invoice date.',
+    'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'previous_invoice_history',
+    'section'     => 'invoicing',
+    'description' => 'Show a month-by-month history of the customer\'s '.
+                     'billing amounts.  This requires template '.
+                     'modification and is currently not supported on the '.
+                     'stock template.',
     'type'        => 'checkbox',
   },
 
@@ -5261,6 +5315,33 @@ and customer address. Include units.',
     },
   },
 
+  #false laziness w/above options_sub and option_sub
+  {
+    'key'         => 'cust_location-exports',
+    'section'     => '',
+    'description' => 'Export(s) to call on cust_location insert, modification and deletion.',
+    'type'        => 'select-sub',
+    'multiple'    => 1,
+    'options_sub' => sub {
+      require FS::Record;
+      require FS::part_export;
+      my @part_export =
+        map { qsearch( 'part_export', {exporttype => $_ } ) }
+          keys %{FS::part_export::export_info('cust_location')};
+      map { $_->exportnum => $_->exporttype.' to '.$_->machine } @part_export;
+    },
+    'option_sub'  => sub {
+      require FS::Record;
+      require FS::part_export;
+      my $part_export = FS::Record::qsearchs(
+        'part_export', { 'exportnum' => shift }
+      );
+      $part_export
+        ? $part_export->exporttype.' to '.$part_export->machine
+        : '';
+    },
+  },
+
   {
     'key'         => 'cust_tag-location',
     'section'     => 'UI',
@@ -5600,6 +5681,13 @@ and customer address. Include units.',
   },
 
   {
+    'key'         => 'selfservice-hide_cdr_price',
+    'section'     => 'self-service',
+    'description' => 'Don\'t show the "Price" column on CDRs in self-service.',
+    'type'        => 'checkbox',
+  },
+
+  {
     'key'         => 'logout-timeout',
     'section'     => 'UI',
     'description' => 'If set, automatically log users out of the backoffice after this many minutes.',
@@ -5724,6 +5812,20 @@ and customer address. Include units.',
 			   );
                            $reason ? $reason->reason : '';
 			 },
+  },
+
+  {
+    'key'         => 'part_pkg-term_discounts',
+    'section'     => 'billing',
+    'description' => 'Enable the term discounts feature.  Recommended to keep turned off unless actually using - not well optimized for large installations.',
+    'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'prepaid-never_renew',
+    'section'     => 'billing',
+    'description' => 'Prepaid packages never renew.',
+    'type'        => 'checkbox',
   },
 
   { key => "apacheroot", section => "deprecated", description => "<b>DEPRECATED</b>", type => "text" },

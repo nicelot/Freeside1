@@ -98,6 +98,7 @@ if ( -e $addl_handler_use_file ) {
 
   use Business::CreditCard 0.30; #for mask-aware cardtype()
   use NetAddr::IP;
+  use Net::MAC::Vendor;
   use Net::Ping;
   use Net::Ping::External;
   #if CPAN #7815 ever gets fixed# if ( $Net::Ping::External::VERSION <= 0.12 )
@@ -146,6 +147,7 @@ if ( -e $addl_handler_use_file ) {
   use FS::Report::Table;
   use FS::Report::Table::Monthly;
   use FS::Report::Table::Daily;
+  use FS::Report::Tax;
   use FS::TicketSystem;
   use FS::NetworkMonitoringSystem;
   use FS::Tron qw( tron_lint );

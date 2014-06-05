@@ -26,6 +26,8 @@ use FS::cust_bill_pkg_tax_location_void;
 use FS::cust_bill_pkg_tax_rate_location_void;
 use FS::cust_tax_exempt_pkg_void;
 
+use FS::Cursor;
+
 $DEBUG = 0;
 $me = '[FS::cust_bill_pkg]';
 
@@ -970,7 +972,13 @@ sub tax_locationnum {
 
 sub tax_location {
   my $self = shift;
-  FS::cust_location->by_key($self->tax_locationnum);
+  if ( $self->pkgnum ) { # normal sales
+    return $self->cust_pkg->tax_location;
+  } elsif ( $self->feepart ) { # fees
+    return $self->cust_bill->cust_main->ship_location;
+  } else { # taxes
+    return;
+  }
 }
 
 =item part_X
@@ -1152,8 +1160,7 @@ sub upgrade_tax_location {
   ' WHERE cust_bill_pkg.invnum = cust_bill.invnum'.
   ' AND exempt_monthly IS NULL';
 
-  my @invnums = map { $_->invnum } qsearch({
-      select => 'cust_bill.invnum',
+  my $search = FS::Cursor->new({
       table => 'cust_bill',
       hashref => {},
       extra_sql => "WHERE NOT EXISTS($sub_has_tax_link) ".
@@ -1161,11 +1168,12 @@ sub upgrade_tax_location {
                     $date_where,
   });
 
-  print "Processing ".scalar(@invnums)." invoices...\n";
+#print "Processing ".scalar(@invnums)." invoices...\n";
 
   my $committed;
   INVOICE:
-  foreach my $invnum (@invnums) {
+  while (my $cust_bill = $search->fetch) {
+    my $invnum = $cust_bill->invnum;
     $committed = 0;
     print STDERR "Invoice #$invnum\n";
     my $pre = '';
@@ -1455,7 +1463,9 @@ sub upgrade_tax_location {
       my $i = 0;
       my $nlinks = scalar(@tax_links);
       if ( $nlinks ) {
-        while (int($cents_remaining) > 0) {
+        # ensure that it really is an integer
+        $cents_remaining = sprintf('%.0f', $cents_remaining);
+        while ($cents_remaining > 0) {
           $tax_links[$i % $nlinks]->{cents} += 1;
           $cents_remaining--;
           $i++;
@@ -1576,6 +1586,14 @@ sub _upgrade_data {
   });
   # call it kind of like a class method, not that it matters much
   $job->insert($class, 's' => str2time('2012-01-01'));
+  # if there's a customer location upgrade queued also, wait for it to 
+  # finish
+  my $location_job = qsearchs('queue', {
+      job => 'FS::cust_main::Location::process_upgrade_location'
+    });
+  if ( $location_job ) {
+    $job->depend_insert($location_job->jobnum);
+  }
   # Then mark the upgrade as done, so that we don't queue the job twice
   # and somehow run two of them concurrently.
   FS::upgrade_journal->set_done($upgrade);

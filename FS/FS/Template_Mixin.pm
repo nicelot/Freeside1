@@ -1022,7 +1022,8 @@ sub print_generic {
     warn "$me   searching for line items\n"
       if $DEBUG > 1;
 
-    foreach my $line_item ( $self->_items_pkg(%options) ) {
+    foreach my $line_item ( $self->_items_pkg(%options),
+                            $self->_items_fee(%options) ) {
 
       warn "$me     adding line item $line_item\n"
         if $DEBUG > 1;
@@ -1050,6 +1051,7 @@ sub print_generic {
       $detail->{'edate'} = $line_item->{'edate'};
       $detail->{'seconds'} = $line_item->{'seconds'};
       $detail->{'svc_label'} = $line_item->{'svc_label'};
+      $detail->{'usage_item'} = $line_item->{'usage_item'};
   
       push @detail_items, $detail;
       push @buf, ( [ $detail->{'description'},
@@ -1388,6 +1390,37 @@ sub print_generic {
     push @summary_subtotals, $s;
   }
   $invoice_data{summary_subtotals} = \@summary_subtotals;
+
+  # usage subtotals
+  if ( $conf->exists('usage_class_summary')
+       and $self->can('_items_usage_class_summary') ) {
+    my @usage_subtotals = $self->_items_usage_class_summary(escape => $escape_function);
+    if ( @usage_subtotals ) {
+      unshift @sections, $usage_subtotals[0]->{section};
+      unshift @detail_items, @usage_subtotals;
+    }
+  }
+
+  # invoice history "section" (not really a section)
+  # not to be included in any subtotals, completely independent of 
+  # everything...
+  if ( $conf->exists('previous_invoice_history') ) {
+    my %history;
+    my %monthorder;
+    foreach my $cust_bill ( $cust_main->cust_bill ) {
+      # XXX hardcoded format, and currently only 'charged'; add other fields
+      # if they become necessary
+      my $date = $self->time2str_local('%b %Y', $cust_bill->_date);
+      $history{$date} ||= 0;
+      $history{$date} += $cust_bill->charged;
+      # just so we have a numeric sort key
+      $monthorder{$date} ||= $cust_bill->_date;
+    }
+    my @sorted_months = sort { $monthorder{$a} <=> $monthorder{$b} }
+                        keys %history;
+    my @sorted_amounts = map { sprintf('%.2f', $history{$_}) } @sorted_months;
+    $invoice_data{monthly_history} = [ \@sorted_months, \@sorted_amounts ];
+  }
 
   # debugging hook: call this with 'diag' => 1 to just get a hash of 
   # the invoice variables
@@ -1865,10 +1898,13 @@ sub _items_sections {
 
         my $section = $display->section;
         my $type    = $display->type;
-        $section = undef unless $opt{by_category};
+        # Set $section = undef if we're sectioning by location and this
+        # line item _has_ a location (i.e. isn't a fee).
+        $section = undef if $locationnum;
 
+        # set this flag if the section is not tax-only
         $not_tax{$locationnum}{$section} = 1
-          unless $cust_bill_pkg->pkgnum == 0;
+          if $cust_bill_pkg->pkgnum  or $cust_bill_pkg->feepart;
 
         # there's actually a very important piece of logic buried in here:
         # incrementing $late_subtotal{$section} CREATES 
@@ -1904,7 +1940,9 @@ sub _items_sections {
         } else { # it's a pre-total (normal) section
 
           # skip tax items unless they're explicitly included in a section
-          next if $cust_bill_pkg->pkgnum == 0 && ! $section;
+          next if $cust_bill_pkg->pkgnum == 0 and
+                  ! $cust_bill_pkg->feepart   and
+                  ! $section;
 
           if (! $type || $type eq 'S') {
             $subtotal{$locationnum}{$section} += $cust_bill_pkg->setup
@@ -2260,6 +2298,58 @@ sub _items_nontax {
   grep { $_->pkgnum } $self->cust_bill_pkg;
 }
 
+sub _items_fee {
+  my $self = shift;
+  my %options = @_;
+  my @cust_bill_pkg = grep { $_->feepart } $self->cust_bill_pkg;
+  my @items;
+  foreach my $cust_bill_pkg (@cust_bill_pkg) {
+    # cache this, so we don't look it up again in every section
+    my $part_fee = $cust_bill_pkg->get('part_fee')
+       || $cust_bill_pkg->part_fee;
+    $cust_bill_pkg->set('part_fee', $part_fee);
+    if (!$part_fee) {
+      #die "fee definition not found for line item #".$cust_bill_pkg->billpkgnum."\n"; # might make more sense
+      warn "fee definition not found for line item #".$cust_bill_pkg->billpkgnum."\n";
+      next;
+    }
+    if ( exists($options{section}) and exists($options{section}{category}) )
+    {
+      my $categoryname = $options{section}{category};
+      # then filter for items that have that section
+      if ( $part_fee->categoryname ne $categoryname ) {
+        warn "skipping fee '".$part_fee->itemdesc."'--not in section $categoryname\n" if $DEBUG;
+        next;
+      }
+    } # otherwise include them all in the main section
+    # XXX what to do when sectioning by location?
+    
+    my @ext_desc;
+    my %base_invnums; # invnum => invoice date
+    foreach ($cust_bill_pkg->cust_bill_pkg_fee) {
+      if ($_->base_invnum) {
+        my $base_bill = FS::cust_bill->by_key($_->base_invnum);
+        my $base_date = $self->time2str_local('short', $base_bill->_date)
+          if $base_bill;
+        $base_invnums{$_->base_invnum} = $base_date || '';
+      }
+    }
+    foreach (sort keys(%base_invnums)) {
+      next if $_ == $self->invnum;
+      push @ext_desc,
+        $self->mt('from invoice \\#[_1] on [_2]', $_, $base_invnums{$_});
+    }
+    push @items,
+      { feepart     => $cust_bill_pkg->feepart,
+        amount      => sprintf('%.2f', $cust_bill_pkg->setup + $cust_bill_pkg->recur),
+        description => $part_fee->itemdesc_locale($self->cust_main->locale),
+        ext_description => \@ext_desc
+        # sdate/edate?
+      };
+  }
+  @items;
+}
+
 sub _items_pkg {
   my $self = shift;
   my %options = @_;
@@ -2315,7 +2405,8 @@ sub _taxsort {
 
 sub _items_tax {
   my $self = shift;
-  my @cust_bill_pkg = sort _taxsort grep { ! $_->pkgnum } $self->cust_bill_pkg;
+  my @cust_bill_pkg = sort _taxsort grep { ! $_->pkgnum and ! $_->feepart } 
+    $self->cust_bill_pkg;
   my @items = $self->_items_cust_bill_pkg(\@cust_bill_pkg, @_);
 
   if ( $self->conf->exists('always_show_tax') ) {
@@ -2406,7 +2497,7 @@ sub _items_cust_bill_pkg {
     if ( $locationnum ) {
       # this is a location section; skip packages that aren't at this
       # service location.
-      next if $cust_bill_pkg->pkgnum == 0;
+      next if $cust_bill_pkg->pkgnum == 0; # skips fees...
       next if $self->cust_pkg_hash->{ $cust_bill_pkg->pkgnum }->locationnum 
               != $locationnum;
     }
@@ -2435,6 +2526,9 @@ sub _items_cust_bill_pkg {
       @cust_bill_pkg_display = grep { !$_->summary }
                                 @cust_bill_pkg_display;
     }
+
+    my $classname = ''; # package class name, will fill in later
+
     foreach my $display (@cust_bill_pkg_display) {
 
       warn "$me _items_cust_bill_pkg considering cust_bill_pkg_display ".
@@ -2495,6 +2589,9 @@ sub _items_cust_bill_pkg {
         %item_dates = map { $_ => $cust_bill_pkg->$_ } ('sdate', 'edate')
           unless $part_pkg->option('disable_line_item_date_ranges',1);
 
+        # not normally used, but pass this to the template anyway
+        $classname = $part_pkg->classname;
+
         if (    (!$type || $type eq 'S')
              && (    $cust_bill_pkg->setup != 0
                   || $cust_bill_pkg->setup_show_zero
@@ -2521,16 +2618,20 @@ sub _items_cust_bill_pkg {
 
           my @d = ();
           my $svc_label;
+
+          # always pass the svc_label through to the template, even if 
+          # not displaying it as an ext_description
+          my @svc_labels = map &{$escape_function}($_),
+                      $cust_pkg->h_labels_short($self->_date, undef, 'I');
+
+          $svc_label = $svc_labels[0];
+
           unless ( $cust_pkg->part_pkg->hide_svc_detail
                 || $cust_bill_pkg->hidden )
           {
 
-            my @svc_labels = map &{$escape_function}($_),
-                        $cust_pkg->h_labels_short($self->_date, undef, 'I');
             push @d, @svc_labels
               unless $cust_bill_pkg->pkgpart_override; #don't redisplay services
-            $svc_label = $svc_labels[0];
-
             my $lnum = $cust_main ? $cust_main->ship_locationnum
                                   : $self->prospect_main->locationnum;
             # show the location label if it's not the customer's default
@@ -2604,6 +2705,10 @@ sub _items_cust_bill_pkg {
           push @dates, $prev->sdate if $prev;
           push @dates, undef if !$prev;
 
+          my @svc_labels = map &{$escape_function}($_),
+                      $cust_pkg->h_labels_short(@dates, 'I');
+          $svc_label = $svc_labels[0];
+
           # show service labels, unless...
                     # the package is set not to display them
           unless ( $part_pkg->hide_svc_detail
@@ -2623,12 +2728,8 @@ sub _items_cust_bill_pkg {
             warn "$me _items_cust_bill_pkg adding service details\n"
               if $DEBUG > 1;
 
-            my @svc_labels = map &{$escape_function}($_),
-                        $cust_pkg->h_labels_short(@dates, 'I');
             push @d, @svc_labels
               unless $cust_bill_pkg->pkgpart_override; #don't redisplay services
-            $svc_label = $svc_labels[0];
-
             warn "$me _items_cust_bill_pkg done adding service details\n"
               if $DEBUG > 1;
 
@@ -2737,6 +2838,7 @@ sub _items_cust_bill_pkg {
                 pkgpart         => $pkgpart,
                 pkgnum          => $cust_bill_pkg->pkgnum,
                 amount          => $amount,
+                usage_item      => 1,
                 recur_show_zero => $cust_bill_pkg->recur_show_zero,
                 %item_dates,
                 ext_description => \@d,

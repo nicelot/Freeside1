@@ -341,6 +341,8 @@ sub insert {
   $self->order_date(time) unless ($import && $self->order_date)
                               or $self->change_pkgnum;
 
+  $self->susp( $self->order_date ) if $self->susp eq 'now';
+
   my $oldAutoCommit = $FS::UID::AutoCommit;
   local $FS::UID::AutoCommit = 0;
   my $dbh = dbh;
@@ -1550,16 +1552,20 @@ sub unsuspend {
 
   my $conf = new FS::Conf;
 
-  if ( $inactive > 0 && 
-       ( $hash{'bill'} || $hash{'setup'} ) &&
-       ( $opt{'adjust_next_bill'} ||
-         $conf->exists('unsuspend-always_adjust_next_bill_date') ||
-         $self->part_pkg->option('unsuspend_adjust_bill', 1) )
-     ) {
-
-    $hash{'bill'} = ( $hash{'bill'} || $hash{'setup'} ) + $inactive;
-  
-  }
+  #adjust the next bill date forward
+  $hash{'bill'} = ( $hash{'bill'} || $hash{'setup'} ) + $inactive
+    if $inactive > 0
+    && ( $hash{'bill'} || $hash{'setup'} )
+    && (    $opt{'adjust_next_bill'}
+         || $conf->exists('unsuspend-always_adjust_next_bill_date')
+         || $self->part_pkg->option('unsuspend_adjust_bill', 1)
+       )
+    && ! $self->option('suspend_bill',1)
+    && (    ! $self->part_pkg->option('suspend_bill',1)
+         || $self->option('no_suspend_bill',1)
+       )
+    && $hash{'order_date'} != $hash{'susp'}
+  ;
 
   $hash{'susp'} = '';
   $hash{'adjourn'} = '' if $hash{'adjourn'} and $hash{'adjourn'} < time;
@@ -2995,17 +3001,35 @@ following extra fields:
 
 =over 4
 
-=item num_cust_svc  (count)
+=item num_cust_svc
 
-=item num_avail     (quantity - count)
+(count)
 
-=item cust_pkg_svc (services) - array reference containing the provisioned services, as cust_svc objects
+=item num_avail
+
+(quantity - count)
+
+=item cust_pkg_svc
+
+(services) - array reference containing the provisioned services, as cust_svc objects
 
 =back
 
-Accepts one option: summarize_size.  If specified and non-zero, will omit the
-extra cust_pkg_svc option for objects where num_cust_svc is this size or
-greater.
+Accepts two options:
+
+=over 4
+
+=item summarize_size
+
+If true, will omit the extra cust_pkg_svc option for objects where num_cust_svc
+is this size or greater.
+
+=item hide_discontinued
+
+If true, will omit looking for services that are no longer avaialble in the
+package definition.
+
+=back
 
 =cut
 
@@ -3034,16 +3058,18 @@ sub part_svc {
     $part_svc;
   } $self->part_pkg->pkg_svc;
 
-  #extras
-  push @part_svc, map {
-    my $part_svc = $_;
-    my $num_cust_svc = $self->num_cust_svc($part_svc->svcpart);
-    $part_svc->{'Hash'}{'num_cust_svc'} = $num_cust_svc; #speak no evail
-    $part_svc->{'Hash'}{'num_avail'}    = 0; #0-$num_cust_svc ?
-    $part_svc->{'Hash'}{'cust_pkg_svc'} =
-      $num_cust_svc ? [ $self->cust_svc($part_svc->svcpart) ] : [];
-    $part_svc;
-  } $self->extra_part_svc;
+  unless ( $opt{hide_discontinued} ) {
+    #extras
+    push @part_svc, map {
+      my $part_svc = $_;
+      my $num_cust_svc = $self->num_cust_svc($part_svc->svcpart);
+      $part_svc->{'Hash'}{'num_cust_svc'} = $num_cust_svc; #speak no evail
+      $part_svc->{'Hash'}{'num_avail'}    = 0; #0-$num_cust_svc ?
+      $part_svc->{'Hash'}{'cust_pkg_svc'} =
+        $num_cust_svc ? [ $self->cust_svc($part_svc->svcpart) ] : [];
+      $part_svc;
+    } $self->extra_part_svc;
+  }
 
   @part_svc;
 
@@ -3110,6 +3136,8 @@ Returns a short status string for this package, currently:
 
 =over 4
 
+=item on hold
+
 =item not yet billed
 
 =item one-time charge
@@ -3130,6 +3158,7 @@ sub status {
   my $freq = length($self->freq) ? $self->freq : $self->part_pkg->freq;
 
   return 'cancelled' if $self->get('cancel');
+  return 'on hold' if $self->susp && ! $self->setup;
   return 'suspended' if $self->susp;
   return 'not yet billed' unless $self->setup;
   return 'one-time charge' if $freq =~ /^(0|$)/;
@@ -3156,6 +3185,7 @@ Class method that returns the list of possible status strings for packages
 =cut
 
 tie my %statuscolor, 'Tie::IxHash', 
+  'on hold'         => '7E0079', #purple!
   'not yet billed'  => '009999', #teal? cyan?
   'one-time charge' => '000000',
   'active'          => '00CC00',
@@ -3430,7 +3460,16 @@ Returns the L<FS::cust_location> object for tax_locationnum.
 
 sub tax_location {
   my $self = shift;
-  FS::cust_location->by_key( $self->tax_locationnum )
+  my $conf = FS::Conf->new;
+  if ( $conf->exists('tax-pkg_address') and $self->locationnum ) {
+    return FS::cust_location->by_key($self->locationnum);
+  }
+  elsif ( $conf->exists('tax-ship_address') ) {
+    return $self->cust_main->ship_location;
+  }
+  else {
+    return $self->cust_main->bill_location;
+  }
 }
 
 =item seconds_since TIMESTAMP
@@ -4000,7 +4039,7 @@ sub apply_usage {
         minutes     => min($cust_pkg_usage->minutes, $minutes),
     });
     $cust_pkg_usage->set('minutes',
-      sprintf('%.0f', $cust_pkg_usage->minutes - $cdr_cust_pkg_usage->minutes)
+      $cust_pkg_usage->minutes - $cdr_cust_pkg_usage->minutes
     );
     $error = $cust_pkg_usage->replace || $cdr_cust_pkg_usage->insert;
     $minutes -= $cdr_cust_pkg_usage->minutes;
@@ -4200,6 +4239,21 @@ sub inactive_sql { "
   AND ( cust_pkg.susp   IS NULL OR cust_pkg.susp   = 0 )
 "; }
 
+=item on_hold_sql
+
+Returns an SQL expression identifying on-hold packages.
+
+=cut
+
+sub on_hold_sql {
+  #$_[0]->recurring_sql(). ' AND '.
+  "
+        ( cust_pkg.cancel IS     NULL  OR cust_pkg.cancel  = 0 )
+    AND   cust_pkg.susp   IS NOT NULL AND cust_pkg.susp   != 0
+    AND ( cust_pkg.setup  IS     NULL  OR cust_pkg.setup   = 0 )
+  ";
+}
+
 =item susp_sql
 =item suspended_sql
 
@@ -4213,6 +4267,7 @@ sub susp_sql {
   "
         ( cust_pkg.cancel IS     NULL  OR cust_pkg.cancel = 0 )
     AND   cust_pkg.susp   IS NOT NULL AND cust_pkg.susp  != 0
+    AND   cust_pkg.setup  IS NOT NULL AND cust_pkg.setup != 0
   ";
 }
 
@@ -4238,6 +4293,7 @@ Returns an SQL expression to give the package status as a string.
 sub status_sql {
 "CASE
   WHEN cust_pkg.cancel IS NOT NULL THEN 'cancelled'
+  WHEN ( cust_pkg.susp IS NOT NULL AND cust_pkg.setup IS NULL ) THEN 'on hold'
   WHEN cust_pkg.susp IS NOT NULL THEN 'suspended'
   WHEN cust_pkg.setup IS NULL THEN 'not yet billed'
   WHEN ".onetime_sql()." THEN 'one-time charge'

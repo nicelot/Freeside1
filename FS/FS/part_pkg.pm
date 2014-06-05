@@ -10,6 +10,7 @@ use Time::Local qw( timelocal timelocal_nocheck ); # eventually replace with Dat
 use Tie::IxHash;
 use FS::Conf;
 use FS::Record qw( qsearch qsearchs dbh dbdef );
+use FS::Cursor; # for upgrade
 use FS::pkg_svc;
 use FS::part_svc;
 use FS::cust_pkg;
@@ -215,23 +216,6 @@ sub insert {
     if ( $error ) {
       $dbh->rollback if $oldAutoCommit;
       return $error;
-    }
-  }
-
-  my $conf = new FS::Conf;
-  if ( $conf->exists('agent_defaultpkg') ) {
-    warn "  agent_defaultpkg set; allowing all agents to purchase package"
-      if $DEBUG;
-    foreach my $agent_type ( qsearch('agent_type', {} ) ) {
-      my $type_pkgs = new FS::type_pkgs({
-        'typenum' => $agent_type->typenum,
-        'pkgpart' => $self->pkgpart,
-      });
-      my $error = $type_pkgs->insert;
-      if ( $error ) {
-        $dbh->rollback if $oldAutoCommit;
-        return $error;
-      }
     }
   }
 
@@ -1610,6 +1594,28 @@ sub unit_setup {
   $self->option('setup_fee') || 0;
 }
 
+=item setup_margin
+
+unit_setup minus setup_cost
+
+=cut
+
+sub setup_margin {
+  my $self = shift;
+  $self->unit_setup(@_) - $self->setup_cost;
+}
+
+=item recur_margin_permonth
+
+base_recur_permonth minus recur_cost_permonth
+
+=cut
+
+sub recur_margin_permonth {
+  my $self = shift;
+  $self->base_recur_permonth(@_) - $self->recur_cost_permonth(@_);
+}
+
 =item format OPTION DATA
 
 Returns data formatted according to the function 'format' described
@@ -1677,16 +1683,20 @@ sub _upgrade_data { # class method
     $part_pkg->replace;
 
   }
+  # the rest can be done asynchronously
+}
 
+sub queueable_upgrade {
   # now upgrade to the explicit custom flag
 
-  @part_pkg = qsearch({
+  my $search = FS::Cursor->new({
     'table'     => 'part_pkg',
     'hashref'   => { disabled => 'Y', custom => '' },
     'extra_sql' => "AND comment LIKE '(CUSTOM) %'",
   });
+  my $dbh = dbh;
 
-  foreach my $part_pkg (@part_pkg) {
+  while (my $part_pkg = $search->fetch) {
     my $new = new FS::part_pkg { $part_pkg->hash };
     $new->custom('Y');
     my $comment = $part_pkg->comment;
@@ -1703,15 +1713,25 @@ sub _upgrade_data { # class method
                                'primary_svc' => $primary,
                                'options'     => $options,
                              );
-    die $error if $error;
+    if ($error) {
+      warn "pkgpart#".$part_pkg->pkgpart.": $error\n";
+      $dbh->rollback;
+    } else {
+      $dbh->commit;
+    }
   }
 
   # set family_pkgpart on any packages that don't have it
-  @part_pkg = qsearch('part_pkg', { 'family_pkgpart' => '' });
-  foreach my $part_pkg (@part_pkg) {
+  $search = FS::Cursor->new('part_pkg', { 'family_pkgpart' => '' });
+  while (my $part_pkg = $search->fetch) {
     $part_pkg->set('family_pkgpart' => $part_pkg->pkgpart);
     my $error = $part_pkg->SUPER::replace;
-    die $error if $error;
+    if ($error) {
+      warn "pkgpart#".$part_pkg->pkgpart.": $error\n";
+      $dbh->rollback;
+    } else {
+      $dbh->commit;
+    }
   }
 
   my @part_pkg_option = qsearch('part_pkg_option',
@@ -1822,7 +1842,7 @@ sub _upgrade_data { # class method
       }
     } # $bad_upgrade exists
     else { # do the original upgrade, but correctly this time
-      @part_pkg = qsearch('part_pkg', {
+      my @part_pkg = qsearch('part_pkg', {
           fcc_ds0s        => { op => '>', value => 0 },
           fcc_voip_class  => ''
       });
