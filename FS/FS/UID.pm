@@ -5,6 +5,7 @@ our (
   @ISA, @EXPORT_OK, $DEBUG, $me, $cgi, $freeside_uid, $conf_dir, $cache_dir,
   $secrets, $datasrc, $db_user, $db_pass, $schema, $dbh, $driver_name,
   $olddbh, $AutoCommit, %callback, @callback, $callback_hack, $use_confcompat,
+  %dbh_hash
 );
 use subs qw( getsecrets );
 use Exporter;
