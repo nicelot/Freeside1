@@ -2,7 +2,7 @@ package FS::access_user;
 use base qw( FS::m2m_Common FS::option_Common ); 
 
 use strict;
-use vars qw( $DEBUG $me );
+use vars qw( $DEBUG $me $conf);
 use FS::UID;
 use FS::Auth;
 use FS::Conf;
