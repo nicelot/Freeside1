@@ -8,6 +8,8 @@ use FS::contact_phone;
 use FS::contact_email;
 use FS::queue;
 
+use vars qw( $conf );
+
 =head1 NAME
 
 FS::contact - Object methods for contact records
@@ -82,6 +84,13 @@ disabled
 
 
 =back
+
+=cut
+
+FS::UID->install_callback( sub {
+    $conf = new FS::Conf;
+});
+
 
 =head1 METHODS
 
