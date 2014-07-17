@@ -1008,6 +1008,9 @@ Used by insert & replace to update the fuzzy search cache
 sub queue_fuzzyfiles_update {
   my $self = shift;
 
+  return unless ($conf->config('fuzzy-method') and
+                 $conf->config('fuzzy-method') eq 'String::Approx');
+
   local $SIG{HUP} = 'IGNORE';
   local $SIG{INT} = 'IGNORE';
   local $SIG{QUIT} = 'IGNORE';
