@@ -213,6 +213,14 @@ sub myconnect {
               ReadOnly             => $readonly,
       }) or die "DBI->connect error: $DBI::errstr\n"
         unless $dbh_hash{$server}->{'DBH'}->{'Active'};
+
+      $dbh_hash{$server}->{'DBH'}->memd_init({
+          servers         => [ $dbh_hash{$server}->{'MemcacheServer'} ],
+          namespace       => $dbh_hash{$server}->{'MemcacheNamespace'},
+          close_on_error  => 1,
+          max_failures    => 3,
+          failure_timeout => 2,
+      }) if $dbh_hash{$server}->{'MemcacheServer'};
   }
 
   if (defined $options->{'pref_type'}) {
@@ -422,24 +430,7 @@ Returns a cache object if configured
 
 sub get_cached {
   return $cached ||= do{
-    my $conf = new FS::Conf;
-    if($conf->exists('memcache')){
-      my $memd_args = {
-      #servers   => [ $conf->config( 'memcache-server' ) ],
-        servers => ['localhost:11211'],
-        namespace => 'FS2:',
-        close_on_error => 1,
-        max_failures => 3,
-        failure_timeout => 2,
-      };
-      if (ref $dbh eq 'MemcacheDBI') {
-        $dbh->memd_init($memd_args) unless $dbh->memd;  #TODO: OR DIE
-        $cached = $dbh->memd;
-      } else {
-        require Cache::Memcached::Fast;
-        $cached = new Cache::Memcached::Fast $memd_args; #TODO: OR DIE
-      }
-    }
+    $cached = ref $dbh eq 'MemcacheDBI' ? $dbh->memd : undef;
     $cached;
   }
 }
