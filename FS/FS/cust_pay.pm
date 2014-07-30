@@ -533,6 +533,7 @@ sub check {
     || $self->ut_numbern('teller')
     || $self->ut_foreign_keyn('batchnum', 'pay_batch', 'batchnum')
     || $self->payinfo_check()
+    || $self->ut_numbern('agent_transid')
   ;
   return $error if $error;
 

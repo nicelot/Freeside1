@@ -2307,11 +2307,12 @@ sub tables_hashref {
         'processor',   'varchar', 'NULL', $char_d, '', '', # module name
         'auth',        'varchar', 'NULL',      16, '', '', # CC auth number
         'order_number','varchar', 'NULL', $char_d, '', '', # transaction number
+        'agent_transid',   'int', 'NULL',        '','','',  #agent transaction id
       ],
       'primary_key'  => 'paynum',
       #i guess not now, with cust_pay_pending, if we actually make it here, we _do_ want to record it# 'unique' => [ [ 'payunique' ] ],
       'index'        => [ ['custnum'], ['paybatch'], ['payby'], ['_date'],
-                          ['usernum'],
+                          ['usernum'],['agent_transid'],
                         ],
       'foreign_keys' => [
                           { columns    => [ 'custnum' ],
