@@ -1146,7 +1146,7 @@ sub reason_type_options {
   {
     'key'         => 'unapplycredits',
     'section'     => 'deprecated',
-    'description' => '<B>DEPRECATED</B>, now controlled by ACLs.  Used to nable "unapplication" of unclosed credits.',
+    'description' => '<B>DEPRECATED</B>, now controlled by ACLs.  Used to enable "unapplication" of unclosed credits.',
     'type'        => 'checkbox',
   },
 
@@ -3503,13 +3503,6 @@ and customer address. Include units.',
   },
 
   {
-    'key'         => 'cust_pkg-show_fcc_voice_grade_equivalent',
-    'section'     => 'UI',
-    'description' => "Show fields on package definitions for FCC Form 477 classification",
-    'type'        => 'checkbox',
-  },
-
-  {
     'key'         => 'cust_pkg-large_pkg_size',
     'section'     => 'UI',
     'description' => "In customer view, summarize packages with more than this many services.  Set to zero to never summarize packages.",
@@ -3520,6 +3513,13 @@ and customer address. Include units.',
     'key'         => 'cust_pkg-hide_discontinued-part_svc',
     'section'     => 'UI',
     'description' => "In customer view, hide provisioned services which are no longer available in the package definition.  Not normally used except for very specific situations as it hides still-provisioned services.",
+    'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'part_pkg-show_fcc_options',
+    'section'     => 'UI',
+    'description' => "Show fields on package definitions for FCC Form 477 classification",
     'type'        => 'checkbox',
   },
 
@@ -5825,6 +5825,31 @@ and customer address. Include units.',
     'key'         => 'prepaid-never_renew',
     'section'     => 'billing',
     'description' => 'Prepaid packages never renew.',
+    'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'agent-disable_counts',
+    'section'     => 'UI',
+    'description' => 'On the agent browse page, disable the customer and package counts.  Typically used for very large databases when this page takes too long to render.',
+    'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'tollfree-country',
+    'section'     => 'telephony',
+    'description' => 'Country / region for toll-free recognition',
+    'type'        => 'select',
+    'select_hash' => [ ''   => 'NANPA (US/Canada)',
+                       'AU' => 'Australia',
+                       'NZ' => 'New Zealand',
+                     ],
+  },
+
+  {
+    'key'         => 'old_fcc_report',
+    'section'     => '',
+    'description' => 'Use the old (pre-2014) FCC Form 477 report format.',
     'type'        => 'checkbox',
   },
 

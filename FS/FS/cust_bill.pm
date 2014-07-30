@@ -41,11 +41,6 @@ use FS::L10N;
 $DEBUG = 0;
 $me = '[FS::cust_bill]';
 
-#ask FS::UID to run this stuff for us later
-FS::UID->install_callback( sub { 
-  my $conf = new FS::Conf; #global
-} );
-
 =head1 NAME
 
 FS::cust_bill - Object methods for cust_bill records
@@ -102,23 +97,19 @@ L<Time::Local> and L<Date::Parse> for conversion functions.
 
 =back
 
-Customer info at invoice generation time
+Deprecated fields
 
 =over 4
 
-=item billing_balance - the customer's balance at the time the invoice was 
-generated (not including charges on this invoice)
+=item billing_balance - the customer's balance immediately before generating
+this invoice.  DEPRECATED.  Use the L<FS::cust_main/balance_date> method 
+to determine the customer's balance at a specific time.
 
-=item previous_balance - the billing_balance of this customer's previous 
-invoice plus the charges on that invoice
+=item previous_balance - the customer's balance immediately after generating
+the invoice before this one.  DEPRECATED.
 
-=back
-
-Deprecated
-
-=over 4
-
-=item printed - deprecated
+=item printed - formerly used to track the number of times an invoice had 
+been printed; no longer used.
 
 =back
 
@@ -416,8 +407,8 @@ cust_bill-default_agent_invid is set and it has a value, invnum otherwise.
 
 sub display_invnum {
   my $self = shift;
-  my $conf = $self->conf;
-  if ( $conf->exists('cust_bill-default_agent_invid') && $self->agent_invid ){
+  if ( $self->agent_invid
+         && FS::Conf->new->exists('cust_bill-default_agent_invid') ) {
     return $self->agent_invid;
   } else {
     return $self->invnum;
@@ -2405,13 +2396,20 @@ sub invoice_barcode {
 =item invnum_date_pretty
 
 Returns a string with the invoice number and date, for example:
-"Invoice #54 (3/20/2008)"
+"Invoice #54 (3/20/2008)".
+
+Intended for back-end context, with regard to translation and date formatting.
 
 =cut
 
+#note: this uses _date_pretty_unlocalized because _date_pretty is too expensive
+# for backend use (and also does the wrong thing, localizing for end customer
+# instead of backoffice configured date format)
 sub invnum_date_pretty {
   my $self = shift;
-  $self->mt('Invoice #'). $self->invnum. ' ('. $self->_date_pretty. ')';
+  #$self->mt('Invoice #').
+  'Invoice #'. #XXX should be translated ala web UI user (not invoice customer)
+    $self->invnum. ' ('. $self->_date_pretty_unlocalized. ')';
 }
 
 #sub _items_extra_usage_sections {
@@ -3239,6 +3237,14 @@ sub re_X {
 
   }
 
+}
+
+sub API_getinfo {
+  my $self = shift;
+  +{ ( map { $_=>$self->$_ } $self->fields ),
+     'owed' => $self->owed,
+     #XXX last payment applied date
+   };
 }
 
 =back

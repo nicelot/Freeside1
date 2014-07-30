@@ -200,7 +200,7 @@ sub dbdef_dist {
     grep {    ! /^(clientapi|access_user)_session/
            && ! /^h_/
            && ! /^log(_context)?$/
-           && ( ! /^queue(_arg)?$/ || ! $opt->{'queue-no_history'} )
+           && ( ! /^queue(_arg|_depend|_stat)?$/ || ! $opt->{'queue-no_history'} )
            && ! $tables_hashref_torrus->{$_}
          }
       $dbdef->tables
@@ -662,6 +662,7 @@ sub tables_hashref {
         'invoice_terms', 'varchar', 'NULL', $char_d, '', '',
 
         #customer balance info at invoice generation time
+        #(deprecated)
         'previous_balance',   @money_typen, '', '',  #eventually not nullable
         'billing_balance',    @money_typen, '', '',  #eventually not nullable
 
@@ -2590,6 +2591,13 @@ sub tables_hashref {
                           ['last_bill'], ['susp'], ['adjourn'], ['cancel'],
                           ['expire'], ['contract_end'], ['change_date'],
                           ['no_auto'],
+                          #['contactnum'],
+                          ['salesnum'],
+                          #['uncancel_pkgnum'],
+                          #['change_pkgnum'], ['change_locationnum'],
+                          #['change_custnum'],
+                          ['main_pkgnum'],
+                          #['pkglinknum'], ['change_to_pkgnum'],
                         ],
       'foreign_keys' => [
                           { columns    => [ 'custnum' ],
@@ -4035,7 +4043,7 @@ sub tables_hashref {
       ],
       'primary_key'  => 'prepaynum',
       'unique'       => [ ['identifier'] ],
-      'index'        => [],
+      'index'        => [ ['agentnum'] ],
       'foreign_keys' => [
                           { columns    => [ 'agentnum' ],
                             table      => 'agent',
@@ -4167,6 +4175,21 @@ sub tables_hashref {
                             on_delete  => 'CASCADE',
                           },
                         ],
+    },
+
+    'queue_stat' => {
+      'columns' => [
+        'statnum', 'bigserial',     '',  '', '', '',
+        'jobnum',     'bigint',     '',  '', '', '',
+        'job',       'varchar',     '', 512, '', '', 
+        'custnum',       'int', 'NULL',  '', '', '',
+        'insert_date', @date_type, '', '',
+        'start_date',  @date_type, '', '', 
+        'end_date',    @date_type, '', '', 
+      ],
+      'primary_key'  => 'statnum',
+      'unique'       => [], #[ ['jobnum'] ],
+      'index'        => [],
     },
 
     'export_svc' => {
@@ -4747,6 +4770,18 @@ sub tables_hashref {
                             table      => 'usage_class',
                           },
                         ],
+    },
+
+    'part_pkg_fcc_option' => {
+      'columns' => [
+        'num',        'serial', '', '', '', '',
+        'fccoptionname', 'varchar', '', $char_d, '', '',
+        'pkgpart',       'int', '', '', '', '',
+        'optionvalue',   'varchar', 'NULL', $char_d, '', '',
+      ],
+      'primary_key' => 'num',
+      'unique'      => [ [ 'fccoptionname', 'pkgpart' ] ],
+      'index'       => [],
     },
 
     'rate' => {
@@ -5555,6 +5590,8 @@ sub tables_hashref {
         'sms_carrierid',                  'int', 'NULL',      '', '', '',
         'sms_account',                'varchar', 'NULL', $char_d, '', '',
         'max_simultaneous',               'int', 'NULL',      '', '', '',
+        'e911_class',                    'char', 'NULL',       1, '', '',
+        'e911_type',                     'char', 'NULL',       1, '', '', 
       ],
       'primary_key'  => 'svcnum',
       'unique'       => [ [ 'sms_carrierid', 'sms_account'] ],
@@ -6456,7 +6493,8 @@ sub tables_hashref {
       'columns' => [
         'vendbillnum',    'serial',     '',      '', '', '', 
         'vendnum',           'int',     '',      '', '', '', 
-        '_date',        @date_type,                  '', '', 
+        #'_date',        @date_type,                  '', '', 
+        '_date',     'int', '', '',                   '', '', 
         'charged',     @money_type,                  '', '', 
       ],
       'primary_key'  => 'vendbillnum',
@@ -6473,7 +6511,8 @@ sub tables_hashref {
       'columns' => [
         'vendpaynum',   'serial',    '',       '', '', '',
         'vendnum',         'int',    '',       '', '', '', 
-        '_date',     @date_type,                   '', '', 
+        #'_date',     @date_type,                   '', '', 
+        '_date',     'int', '', '',                   '', '', 
         'paid',      @money_type,                  '', '', 
       ],
       'primary_key'  => 'vendpaynum',
@@ -6581,6 +6620,59 @@ sub tables_hashref {
                           },
                         ],
     },
+
+    'export_batch' => {
+      'columns' => [
+        'batchnum',    'serial',     '',      '', '', '',
+        'exportnum',      'int',     '',      '', '', '',
+        '_date',          'int',     '',      '', '', '',
+        'status',     'varchar', 'NULL',      32, '', '',
+        'statustext',    'text', 'NULL',      '', '', '',
+      ],
+      'primary_key'  => 'batchnum',
+      'unique'       => [],
+      'index'        => [ [ 'exportnum' ], [ 'status' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'exportnum' ],
+                            table      => 'part_export',
+                            references => [ 'exportnum' ]
+                          },
+                        ],
+    },
+
+    'export_batch_item' => {
+      'columns' => [
+        'itemnum',     'serial',     '',      '', '', '',
+        'batchnum',       'int',     '',      '', '', '',
+        'svcnum',         'int',     '',      '', '', '',
+        'action',     'varchar',     '',      32, '', '',
+        'data',          'text', 'NULL',      '', '', '',
+        'frozen',        'char', 'NULL',       1, '', '',
+      ],
+      'primary_key'  => 'itemnum',
+      'unique'       => [],
+      'index'        => [ [ 'batchnum' ], [ 'svcnum' ] ],
+      'foreign_keys' => [
+                          { columns    => [ 'batchnum' ],
+                            table      => 'export_batch',
+                            references => [ 'batchnum' ]
+                          },
+                        ],
+    },
+
+    # lookup table for states, similar to msa and lata
+    'state' => {
+      'columns' => [
+        'statenum', 'int',  '', '', '', '', 
+        'country',  'char', '',  2, '', '',
+        'state',    'char', '', $char_d, '', '', 
+        'fips',     'char', '',  3, '', '',
+      ],
+      'primary_key' => 'statenum',
+      'unique' => [ [ 'country', 'state' ], ],
+      'index' => [],
+    },
+
 
     # name type nullability length default local
 

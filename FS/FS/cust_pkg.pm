@@ -1,5 +1,5 @@
 package FS::cust_pkg;
-use base qw( FS::cust_pkg::Search
+use base qw( FS::cust_pkg::Search FS::cust_pkg::API
              FS::otaker_Mixin FS::cust_main_Mixin FS::Sales_Mixin
              FS::contact_Mixin FS::location_Mixin
              FS::m2m_Common FS::option_Common
@@ -2823,7 +2823,7 @@ sub cust_svc_unsorted {
 sub cust_svc_unsorted_arrayref {
   my $self = shift;
 
-  return () unless $self->num_cust_svc(@_);
+  return [] unless $self->num_cust_svc(@_);
 
   my %opt = ();
   if ( @_ && $_[0] =~ /^\d+/ ) {
@@ -3187,7 +3187,7 @@ Class method that returns the list of possible status strings for packages
 tie my %statuscolor, 'Tie::IxHash', 
   'on hold'         => '7E0079', #purple!
   'not yet billed'  => '009999', #teal? cyan?
-  'one-time charge' => '000000',
+  'one-time charge' => '0000CC', #blue  #'000000',
   'active'          => '00CC00',
   'suspended'       => 'FF9900',
   'cancelled'       => 'FF0000',
@@ -3198,6 +3198,11 @@ sub statuses {
   #grep { $_ !~ /^(not yet billed)$/ } #this is a dumb status anyway
   #                                    # mayble split btw one-time vs. recur
     keys %statuscolor;
+}
+
+sub statuscolors {
+  #my $self = shift;
+  \%statuscolor;
 }
 
 =item statuscolor

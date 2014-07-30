@@ -368,7 +368,14 @@ to inspect other field.
 sub is_tollfree {
   my $self = shift;
   my $field = scalar(@_) ? shift : 'dst';
-  ( $self->$field() =~ /^(\+?1)?8(8|([02-7])\3)/ ) ? 1 : 0;
+  my $country = $conf->config('tollfree-country');
+  if ( $country eq 'AU' ) { 
+    ( $self->$field() =~ /^(\+?61)?1800/ ) ? 1 : 0;
+  } elsif ( $country eq 'NZ' ) { 
+    ( $self->$field() =~ /^(\+?64)?(800|508)/ ) ? 1 : 0;
+  } else { #NANPA (US/Canaada)
+    ( $self->$field() =~ /^(\+?1)?8(8|([02-7])\3)/ ) ? 1 : 0;
+  }
 }
 
 =item set_charged_party
@@ -820,9 +827,10 @@ sub rate_prefix {
   # We don't round _anything_ (except granularizing) 
   # until the final $charge = sprintf("%.2f"...).
 
-  my $seconds_left = $part_pkg->option_cacheable('use_duration')
-                       ? $self->duration
-                       : $self->billsec;
+  my $rated_seconds = $part_pkg->option_cacheable('use_duration')
+                        ? $self->duration
+                        : $self->billsec;
+  my $seconds_left = $rated_seconds;
 
   #no, do this later so it respects (group) included minutes
   #  # charge for the first (conn_sec) seconds
@@ -830,7 +838,7 @@ sub rate_prefix {
   #  $seconds_left -= $seconds; 
   #  $weektime     += $seconds;
   #  my $charge = $rate_detail->conn_charge; 
-  my $seconds = 0;
+  #my $seconds = 0;
   my $charge = 0;
   my $connection_charged = 0;
 
@@ -888,7 +896,7 @@ sub rate_prefix {
       $seconds_left = 0;
     }
 
-    $seconds += $charge_sec;
+    #$seconds += $charge_sec;
 
     if ( $rate_detail->min_included ) {
       # the old, kind of deprecated way to do this:
@@ -982,7 +990,7 @@ sub rate_prefix {
     $opt{'svcnum'},
     'rated_pretty_dst'    => $pretty_dst,
     'rated_regionname'    => $rate_region->regionname,
-    'rated_seconds'       => $seconds,
+    'rated_seconds'       => $rated_seconds, #$seconds,
     'rated_granularity'   => $rate_detail->sec_granularity, #$granularity
     'rated_ratedetailnum' => $rate_detail->ratedetailnum,
     'rated_classnum'      => $rate_detail->classnum, #rated_ratedetailnum?
@@ -1046,6 +1054,31 @@ sub rate_single_price {
     'rated_granularity' => $granularity,
     'rated_seconds'     => $seconds,
   );
+
+}
+
+=item rate_cost
+
+Rates an already-rated CDR according to the cost fields from the rate plan.
+
+Returns the amount.
+
+=cut
+
+sub rate_cost {
+  my $self = shift;
+
+  return 0 unless $self->rated_ratedetailnum;
+
+  my $rate_detail =
+    qsearchs('rate_detail', { 'ratedetailnum' => $self->rated_ratedetailnum } );
+
+  return $rate_detail->min_cost if $self->rated_granularity == 0;
+
+  my $minutes = $self->rated_seconds / 60;
+  my $charge = $rate_detail->conn_cost + $minutes * $rate_detail->min_cost;
+
+  sprintf('%.2f', $charge + .00001 );
 
 }
 
@@ -1225,7 +1258,7 @@ sub export_formats {
   my $conf = new FS::Conf;
   my $date_format = $conf->config('date_format') || '%m/%d/%Y';
 
-  # call duration in the largest units that accurately reflect the  granularity
+  # call duration in the largest units that accurately reflect the granularity
   my $duration_sub = sub {
     my($cdr, %opt) = @_;
     my $sec = $opt{seconds} || $cdr->billsec;
@@ -1494,8 +1527,8 @@ as keys (for use with batch_import) and "pretty" format names as values.
 
 my %cdr_info;
 foreach my $INC ( @INC ) {
-  warn "globbing $INC/FS/cdr/*.pm\n" if $DEBUG;
-  foreach my $file ( glob("$INC/FS/cdr/*.pm") ) {
+  warn "globbing $INC/FS/cdr/[a-z]*.pm\n" if $DEBUG;
+  foreach my $file ( glob("$INC/FS/cdr/[a-z]*.pm") ) {
     warn "attempting to load CDR format info from $file\n" if $DEBUG;
     $file =~ /\/(\w+)\.pm$/ or do {
       warn "unrecognized file in $INC/FS/cdr/: $file\n";

@@ -1,5 +1,7 @@
 package FS::part_pkg;
-use base qw( FS::m2m_Common FS::o2m_Common FS::option_Common );
+use base qw( FS::part_pkg::API
+             FS::m2m_Common FS::o2m_Common FS::option_Common
+           );
 
 use strict;
 use vars qw( %plans $DEBUG $setup_hack $skip_pkg_svc_hack );
@@ -17,6 +19,9 @@ use FS::cust_pkg;
 use FS::agent_type;
 use FS::type_pkgs;
 use FS::part_pkg_option;
+use FS::part_pkg_fcc_option;
+use FS::pkg_class;
+use FS::agent;
 use FS::part_pkg_msgcat;
 use FS::part_pkg_taxrate;
 use FS::part_pkg_taxoverride;
@@ -331,6 +336,11 @@ sub insert {
       }
   }
 
+  if ( $options{fcc_options} ) {
+    warn "  updating fcc options " if $DEBUG;
+    $self->process_fcc_options( $options{fcc_options} );
+  }
+
   warn "  committing transaction" if $DEBUG and $oldAutoCommit;
   $dbh->commit or die $dbh->errstr if $oldAutoCommit;
 
@@ -612,6 +622,11 @@ sub replace {
     }
   }
 
+  if ( $options->{fcc_options} ) {
+    warn "  updating fcc options " if $DEBUG;
+    $new->process_fcc_options( $options->{fcc_options} );
+  }
+
   warn "  committing transaction" if $DEBUG and $oldAutoCommit;
   $dbh->commit or die $dbh->errstr if $oldAutoCommit;
   '';
@@ -770,6 +785,44 @@ sub propagate {
       if $error;
   }
   join("\n", @error);
+}
+
+=item process_fcc_options HASHREF
+
+Sets the FCC options on this package definition to the values specified
+in HASHREF.
+
+=cut
+
+sub process_fcc_options {
+  my $self = shift;
+  my $pkgpart = $self->pkgpart;
+  my $options;
+  if (ref $_[0]) {
+    $options = shift;
+  } else {
+    $options = { @_ };
+  }
+
+  my %existing_num = map { $_->fccoptionname => $_->num }
+                     qsearch('part_pkg_fcc_option', { pkgpart => $pkgpart });
+
+  local $FS::Record::nowarn_identical = 1;
+  # set up params for process_o2m
+  my $i = 0;
+  my $params = {};
+  foreach my $name (keys %$options ) {
+    $params->{ "num$i" } = $existing_num{$name} || '';
+    $params->{ "num$i".'_fccoptionname' } = $name;
+    $params->{ "num$i".'_optionvalue'   } = $options->{$name};
+    $i++;
+  }
+
+  $self->process_o2m(
+    table   => 'part_pkg_fcc_option',
+    fields  => [qw( fccoptionname optionvalue )],
+    params  => $params,
+  );
 }
 
 =item pkg_locale LOCALE
@@ -1301,6 +1354,35 @@ sub part_pkg_currency_option {
   $part_pkg_currency->optionvalue;
 }
 
+=item fcc_option OPTIONNAME
+
+Returns the FCC 477 report option value for the given name, or the empty 
+string.
+
+=cut
+
+sub fcc_option {
+  my ($self, $name) = @_;
+  my $part_pkg_fcc_option =
+    qsearchs('part_pkg_fcc_option', {
+        pkgpart => $self->pkgpart,
+        fccoptionname => $name,
+    });
+  $part_pkg_fcc_option ? $part_pkg_fcc_option->optionvalue : '';
+}
+
+=item fcc_options
+
+Returns all FCC 477 report options for this package, as a hash-like list.
+
+=cut
+
+sub fcc_options {
+  my $self = shift;
+  map { $_->fccoptionname => $_->optionvalue }
+    qsearch('part_pkg_fcc_option', { pkgpart => $self->pkgpart });
+}
+
 =item bill_part_pkg_link
 
 Returns the associated part_pkg_link records (see L<FS::part_pkg_link>).
@@ -1475,12 +1557,19 @@ sub tax_rates {
                      $self->part_pkg_taxoverride($class);
   if (!@taxclassnums) {
     my $part_pkg_taxproduct = $self->taxproduct($class);
+    # If this isn't defined, then the class has no taxproduct designation,
+    # so return no tax rates.
+    return () if !$part_pkg_taxproduct;
+
+    # convert the taxproduct to the tax classes that might apply to it in 
+    # $geocode
     @taxclassnums = map { $_->taxclassnum }
                     grep { $_->taxable eq 'Y' } # why do we need this?
                     $part_pkg_taxproduct->part_pkg_taxrate($geocode);
   }
   return unless @taxclassnums;
 
+  # then look up the actual tax_rate entries
   warn "Found taxclassnum values of ". join(',', @taxclassnums) ."\n"
       if $DEBUG;
   my $extra_sql = "AND taxclassnum IN (". join(',', @taxclassnums) . ")";
@@ -1931,8 +2020,8 @@ sub _pkgs_sql {
 #false laziness w/part_export & cdr
 my %info;
 foreach my $INC ( @INC ) {
-  warn "globbing $INC/FS/part_pkg/*.pm\n" if $DEBUG;
-  foreach my $file ( glob("$INC/FS/part_pkg/*.pm") ) {
+  warn "globbing $INC/FS/part_pkg/[a-z]*.pm\n" if $DEBUG;
+  foreach my $file ( glob("$INC/FS/part_pkg/[a-z]*.pm") ) {
     warn "attempting to load plan info from $file\n" if $DEBUG;
     $file =~ /\/(\w+)\.pm$/ or do {
       warn "unrecognized file in $INC/FS/part_pkg/: $file\n";

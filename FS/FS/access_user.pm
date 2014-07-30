@@ -514,6 +514,7 @@ sub is_system_user {
     fs_signup
     fs_bootstrap
     fs_selfserv
+    fs_api
   ) );
 }
 
