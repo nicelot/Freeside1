@@ -10,6 +10,7 @@ use FS::contact_email;
 use FS::queue;
 
 $skip_fuzzyfiles = 0;
+use vars qw( $conf );
 
 =head1 NAME
 
@@ -85,6 +86,13 @@ disabled
 
 
 =back
+
+=cut
+
+FS::UID->install_callback( sub {
+    $conf = new FS::Conf;
+});
+
 
 =head1 METHODS
 
@@ -382,6 +390,9 @@ Used by insert & replace to update the fuzzy search cache
 use FS::cust_main::Search;
 sub queue_fuzzyfiles_update {
   my $self = shift;
+
+  return unless ($conf->config('fuzzy-method') and
+                 $conf->config('fuzzy-method') eq 'String::Approx');
 
   local $SIG{HUP} = 'IGNORE';
   local $SIG{INT} = 'IGNORE';

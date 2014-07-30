@@ -5,6 +5,7 @@ our (
   @ISA, @EXPORT_OK, $DEBUG, $me, $cgi, $freeside_uid, $conf_dir, $cache_dir,
   $secrets, $datasrc, $db_user, $db_pass, $schema, $dbh, $driver_name,
   $olddbh, $AutoCommit, %callback, @callback, $callback_hack, $use_confcompat,
+  %dbh_hash
 );
 use subs qw( getsecrets );
 use Exporter;
@@ -180,30 +181,75 @@ sub callback_setup {
 
 sub myconnect {
   my $options = shift || {};
+
+  my $use_server = undef;
+
   unless (ref $options) {
       # Handle being passed a username
       $options = { user => $options };
   }
-  my $handle = DBI->connect( getsecrets($options), 
-    { 'AutoCommit'         => 0,
-      'ChopBlanks'         => 1,
-      'ShowErrorStatement' => 1,
-      'pg_enable_utf8'     => 1,
-      #'mysql_enable_utf8'  => 1,
-    })
-    or die "DBI->connect error: $DBI::errstr\n";
 
-    if ( $schema ) {
-        use DBIx::DBSchema::_util qw(_load_driver ); #quelle hack
-        my $driver = _load_driver($handle);
-        if ( $driver =~ /^Pg/ ) {
-            no warnings 'redefine';
-            eval "sub DBIx::DBSchema::DBD::${driver}::default_db_schema {'$schema'}";
-            die $@ if $@;
-        }
+  $options->{'ServerName'} ||= $ENV{'FS_DBNAME'} if $ENV{'FS_DBNAME'};
+
+  my $all_secrets = getsecrets({ ReturnAll => 1 });
+  %dbh_hash = () unless %dbh_hash;
+
+  foreach my $server (keys %{$all_secrets->{'server'}}) {
+      $dbh_hash{$server} = $all_secrets->{'server'}->{$server};
+      my $readonly = (defined $dbh_hash{$server}->{'ServerType'} &&
+                      $dbh_hash{$server}->{'ServerType'} eq 'ReadOnly')
+                       ? 1
+                       : 0;
+      require MemcacheDBI;
+      $dbh_hash{$server}->{'DBH'} = MemcacheDBI->connect(
+          $dbh_hash{$server}->{'DSN'},
+          $dbh_hash{$server}->{'User'},
+          $dbh_hash{$server}->{'Password'},
+          {   'AutoCommit'         => 0,
+              'ChopBlanks'         => 1,
+              'ShowErrorStatement' => 1,
+              'pg_enable_utf8'     => 1,
+              #'mysql_enable_utf8'  => 1,
+              ReadOnly             => $readonly,
+      }) or die "DBI->connect error: $DBI::errstr\n"
+        unless $dbh_hash{$server}->{'DBH'}->{'Active'};
+
+      $dbh_hash{$server}->{'DBH'}->memd_init({
+          servers         => [ $dbh_hash{$server}->{'MemcacheServer'} ],
+          namespace       => $dbh_hash{$server}->{'MemcacheNamespace'},
+          close_on_error  => 1,
+          max_failures    => 3,
+          failure_timeout => 2,
+      }) if $dbh_hash{$server}->{'MemcacheServer'};
+  }
+
+  if (defined $options->{'pref_type'}) {
+      # Return a handle for random server of a specific type
+      my @pool = grep { $dbh_hash{$_}->{'ServerType'} eq $options->{'pref_type'} } keys %dbh_hash;
+      $use_server = $pool[int rand $#pool] if @pool;
+  }
+  elsif (defined $options->{'ServerName'}) {
+      # Return a handle identified by a specific server name
+      $use_server = $options->{'ServerName'}
+        if defined $dbh_hash{$options->{'ServerName'}};
+  }
+
+  $use_server ||= 'main';
+  my $handle = $dbh_hash{$use_server}->{'DBH'};
+
+  # Return the 'main' server
+  $schema = $dbh_hash{$use_server}->{'Schema'};
+  if ( $schema ) {
+    use DBIx::DBSchema::_util qw(_load_driver ); #quelle hack
+    my $driver = _load_driver($handle);
+    if ( $driver =~ /^Pg/ ) {
+    no warnings 'redefine';
+    eval "sub DBIx::DBSchema::DBD::${driver}::default_db_schema {'$schema'}";
+    die $@ if $@;
     }
+  }
+  return $handle;
 
-  $handle;
 }
 
 =item install_callback
@@ -359,6 +405,10 @@ sub getsecrets {
 
   undef $driver_name;
 
+  if (defined $options->{'ReturnAll'} and $options->{'ReturnAll'}) {
+      return {$secrets->getall};
+  }
+
   ($datasrc, $db_user, $db_pass);
 }
 
@@ -372,7 +422,7 @@ sub use_confcompat {
   $use_confcompat;
 }
 
-=item get_cached 
+=item get_cached
 
 Returns a cache object if configured
 
@@ -380,18 +430,7 @@ Returns a cache object if configured
 
 sub get_cached {
   return $cached ||= do{
-    my $conf = new FS::Conf;
-    if($conf->exists('memcache')){
-      require Cache::Memcached::Fast;
-      $cached = new Cache::Memcached::Fast {
-      #servers   => [ $conf->config( 'memcache-server' ) ],
-        servers => ['localhost:11211'],
-        namespace => 'FS:',
-        close_on_error => 1,
-        max_failures => 3,
-        failure_timeout => 2,
-      };  #TODO: OR DIE
-    }
+    $cached = ref $dbh eq 'MemcacheDBI' ? $dbh->memd : undef;
     $cached;
   }
 }
