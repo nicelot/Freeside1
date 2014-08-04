@@ -223,6 +223,11 @@ sub _legacy_messages {
       #'en_US' => '',
     },
 
+    'illegal_phone_countrycode' => {
+      'en_US' => 'Illegal (phone country)',
+      #'en_US' => '',
+    },
+
     'illegal_zip' => {
       'en_US' => 'Illegal (zip)',
       #'en_US' => '',
