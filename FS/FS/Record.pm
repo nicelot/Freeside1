@@ -2646,6 +2646,8 @@ sub ut_phonen {
     if ($country eq 'US' or $country eq 'CA') {
       $phonen = $conf->config('cust_main-default_areacode').$phonen
         if length($phonen)==7 && $conf->config('cust_main-default_areacode');
+
+      $phonen = "+1 $phonen" unless $phonen =~ m/^\+1/;
     }
     my $normalized = phone_intl($phonen, CountryCode => $pc->country_code);
 
