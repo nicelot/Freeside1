@@ -1561,8 +1561,8 @@ sub tables_hashref {
         'ship_addr_clean',  'char', 'NULL',  1, '', '',
         'ship_daytime',  'varchar', 'NULL', 20, '', '', 
         'ship_night',    'varchar', 'NULL', 20, '', '', 
-        'ship_fax',      'varchar', 'NULL', 12, '', '', 
-        'ship_mobile',   'varchar', 'NULL', 12, '', '', 
+        'ship_fax',      'varchar', 'NULL', 20, '', '', 
+        'ship_mobile',   'varchar', 'NULL', 20, '', '', 
         'currency',         'char', 'NULL',  3, '', '',
 
         #deprecated, info moved to cust_payby
