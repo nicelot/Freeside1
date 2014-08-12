@@ -2709,11 +2709,18 @@ sub ut_phonen {
         }
         my $normalized = phone_intl($phonen, CountryCode => $pc->country_code);
 
-        return gettext('illegal_phone'). " $field: ". $self->getfield($field)
-        unless $normalized;
-
-        $normalized .= " x$extension" if $extension;
-        $self->setfield($field,$normalized);
+        if ($normalized) {
+          $normalized .= " x$extension" if $extension;
+          $self->setfield($field,$normalized);
+        }
+        elsif ($import) {
+          warn gettext('illegal_phone'). " $field: ". $phonen;
+          $phonen .= " x$extension" if $extension;
+          $self->setfield($field,$phonen);
+        }
+        else {
+          return gettext('illegal_phone'). " $field: ". $phonen;
+        }
     }   
   }
   else {
