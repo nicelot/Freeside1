@@ -2676,42 +2676,52 @@ countries, ut_phonen simply calls ut_alphan.
 =cut
 
 sub ut_phonen {
-  my( $self, $field, $country ) = @_;
+  my( $self, $field, $country, $import ) = @_;
   return $self->ut_alphan($field) unless defined $country;
+  $import //= 0;
   my $phonen = $self->getfield($field);
   my $extension = undef;
 
-  my $pc = Number::Phone::CountryCode->new($country);
-  unless ($pc) {
-    warn "Number::Phone::CountryCode couldn't parse countrycode ($country)";
-    return gettext('illegal_phone_countrycode') 
-  }
 
-  if ($phonen =~ m{(ext\.?\s?|x)\d+$}) {
-    # Remove extension for tests, then tack it back on later
-    my ($extension) = $phonen =~ m{\s+?(?:ext\.?\s?|x)(\d+)$};
-    $phonen =~ s{\s+?(?:ext\.?\s?|x)\d+$}{};
-  }
-  
-  if ( $phonen eq '' ) {
-    $self->setfield($field,'');
-  } 
-  else { # Should work with all countries
-
-    if ($country eq 'US' or $country eq 'CA') {
-      $phonen = $conf->config('cust_main-default_areacode').$phonen
-        if length($phonen)==7 && $conf->config('cust_main-default_areacode');
-
-      $phonen = "+1 $phonen" unless $phonen =~ m/^\+1/;
+  if ( Number::Phone::CountryCode::is_supported($country) ) {
+    my $pc = Number::Phone::CountryCode->new($country);
+    unless (defined $pc or $import) {
+        warn "Number::Phone::CountryCode couldn't parse countrycode ($country)";
+        return gettext('illegal_phone_countrycode') 
     }
-    my $normalized = phone_intl($phonen, CountryCode => $pc->country_code);
 
-    return gettext('illegal_phone'). " $field: ". $self->getfield($field)
-      unless $normalized;
+    if ($phonen =~ m{(ext\.?\s?|x)\d+$}) {
+        # Remove extension for tests, then tack it back on later
+        my ($extension) = $phonen =~ m{\s+?(?:ext\.?\s?|x)(\d+)$};
+        $phonen =~ s{\s+?(?:ext\.?\s?|x)\d+$}{};
+    }
+    
+    if ( $phonen eq '' ) {
+        $self->setfield($field,'');
+    } 
+    else { # Should work with all countries
 
-    $normalized .= " x$extension" if $extension;
-    $self->setfield($field,$normalized);
-  }   
+        if ($country eq 'US' or $country eq 'CA') {
+        $phonen = $conf->config('cust_main-default_areacode').$phonen
+            if length($phonen)==7 && $conf->config('cust_main-default_areacode');
+
+        $phonen = "+1 $phonen" unless $phonen =~ m/^\+1/;
+        }
+        my $normalized = phone_intl($phonen, CountryCode => $pc->country_code);
+
+        return gettext('illegal_phone'). " $field: ". $self->getfield($field)
+        unless $normalized;
+
+        $normalized .= " x$extension" if $extension;
+        $self->setfield($field,$normalized);
+    }   
+  }
+  else {
+      # Blindly accept number, don't do any formatting, and send warning to
+      # log
+      warn "Country Code [$country] is not supported for phone number validation";
+      $self->setfield($field,$phonen);
+  }
   '';
 }
 
