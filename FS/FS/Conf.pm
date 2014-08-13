@@ -4176,6 +4176,14 @@ and customer address. Include units.',
   },
 
   {
+    'key'         => 'cust_main-skip_phone_validation',
+    'section'     => '',
+    'description' => 'Skip validation of phone numbers in customer records.',
+    'type'        => 'checkbox',
+    'per_agent'   => 1,
+  },
+
+  {
     'key'         => 'cust_main-check_unique',
     'section'     => '',
     'description' => 'Warn before creating a customer record where these fields duplicate another customer.',

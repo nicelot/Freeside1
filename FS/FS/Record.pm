@@ -23,9 +23,7 @@ use FS::SearchCache;
 use FS::Msgcat qw(gettext);
 use JSON qw(to_json);
 #use FS::Conf; #dependency loop bs, in install_callback below instead
-
-use Number::Phone::Normalize qw( phone_intl );
-use Number::Phone::CountryCode;
+use Data::Dumper;
 
 use FS::part_virtual_field;
 
@@ -1165,8 +1163,6 @@ sub json  {
 sub TO_JSON {
   my($self) = @_;
   return $self->{'Hash'};
-}
-
 #fallbacks/generics
 
 sub API_getinfo {
@@ -2676,58 +2672,27 @@ countries, ut_phonen simply calls ut_alphan.
 =cut
 
 sub ut_phonen {
-  my( $self, $field, $country, $import ) = @_;
+  my( $self, $field, $country ) = @_;
   return $self->ut_alphan($field) unless defined $country;
-  $import //= 0;
   my $phonen = $self->getfield($field);
-  my $extension = undef;
-
-
-  if ( Number::Phone::CountryCode::is_supported($country) ) {
-    my $pc = Number::Phone::CountryCode->new($country);
-    unless (defined $pc or $import) {
-        warn "Number::Phone::CountryCode couldn't parse countrycode ($country)";
-        return gettext('illegal_phone_countrycode') 
-    }
-
-    if ($phonen =~ m{(ext\.?\s?|x)\d+$}) {
-        # Remove extension for tests, then tack it back on later
-        my ($extension) = $phonen =~ m{\s+?(?:ext\.?\s?|x)(\d+)$};
-        $phonen =~ s{\s+?(?:ext\.?\s?|x)\d+$}{};
-    }
-    
-    if ( $phonen eq '' ) {
-        $self->setfield($field,'');
-    } 
-    else { # Should work with all countries
-
-        if ($country eq 'US' or $country eq 'CA') {
-        $phonen = $conf->config('cust_main-default_areacode').$phonen
-            if length($phonen)==7 && $conf->config('cust_main-default_areacode');
-
-        $phonen = "+1 $phonen" unless $phonen =~ m/^\+1/;
-        }
-        my $normalized = phone_intl($phonen, CountryCode => $pc->country_code);
-
-        if ($normalized) {
-          $normalized .= " x$extension" if $extension;
-          $self->setfield($field,$normalized);
-        }
-        elsif ($import) {
-          warn gettext('illegal_phone'). " $field: ". $phonen;
-          $phonen .= " x$extension" if $extension;
-          $self->setfield($field,$phonen);
-        }
-        else {
-          return gettext('illegal_phone'). " $field: ". $phonen;
-        }
-    }   
-  }
-  else {
-      # Blindly accept number, don't do any formatting, and send warning to
-      # log
-      warn "Country Code [$country] is not supported for phone number validation";
-      $self->setfield($field,$phonen);
+  if ( $phonen eq '' ) {
+    $self->setfield($field,'');
+  } elsif ( $country eq 'US' || $country eq 'CA' ) {
+    # only allow EXT characters (extentions)
+    return gettext('illegal_phone'). " $field: ". $self->getfield($field)
+      if $phonen =~ m/[a-df-su-wy-z]/i;
+    $phonen =~ s/\D//g;
+    $phonen = $conf->config('cust_main-default_areacode').$phonen
+      if length($phonen)==7 && $conf->config('cust_main-default_areacode');
+    # remove leading 1 (national dialing prefix) if supplied
+    $phonen =~ m/^1?(\d{3})(\d{3})(\d{4})(\d*)$/
+      or return gettext('illegal_phone'). " $field: ". $self->getfield($field);
+    $phonen = "$1-$2-$3";
+    $phonen .= " x$4" if $4;
+    $self->setfield($field,$phonen);
+  } else {
+    warn "warning: don't know how to check phone numbers for country $country";
+    return $self->ut_textn($field);
   }
   '';
 }

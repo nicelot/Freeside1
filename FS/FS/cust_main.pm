@@ -1822,11 +1822,11 @@ sub check {
   # cust_main_county verification now handled by cust_location check
 
   $error =
-       $self->ut_phonen('daytime', $self->country, $import)
-    || $self->ut_phonen('night',   $self->country, $import)
-    || $self->ut_phonen('fax',     $self->country, $import)
-    || $self->ut_phonen('mobile',  $self->country, $import)
-  ;
+       $self->ut_phonen('daytime', $self->country)
+    || $self->ut_phonen('night',   $self->country)
+    || $self->ut_phonen('fax',     $self->country)
+    || $self->ut_phonen('mobile',  $self->country)
+    unless $conf->config('cust_main-skip_phone_validation');
   return $error if $error;
 
   if ( $conf->exists('cust_main-require_phone', $self->agentnum)
