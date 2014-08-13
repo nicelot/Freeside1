@@ -1,6 +1,6 @@
 package FS::Conf;
 
-our ($base_dir, @config_items, @base_items, @card_types, $DEBUG);
+our ($base_dir, @config_items, @base_items, @card_types, $DEBUG, $conf_cache, $me);
 use Carp;
 use IO::File;
 use File::Basename;
@@ -18,6 +18,7 @@ use FS::Misc::Invoicing qw( spool_formats );
 
 $base_dir = '%%%FREESIDE_CONF%%%';
 
+$me = '[FS::Conf]';
 $DEBUG = 0;
 
 =head1 NAME
@@ -133,7 +134,7 @@ sub _config {
 
   # try with the agentnum first, then fall back to no agentnum if allowed
 
-  if( ! $self->{'conf_cache'} ) {
+  if( ! $conf_cache ) {
     ## is this checking for memcache itself? if so we don't want a inifinite loop!
     #  So we'll handle is in a special manner
     if( $name =~ m/^memcache/ ) {
@@ -142,13 +143,14 @@ sub _config {
     else {
       my $cached = FS::UID::get_cached;
 
-      $self->{'conf_cache'} = $cached->get('conf_cache') if $cached;
-      if( ! $self->{'conf_cache'} ) {
+      warn "$me init conf_cache\n" if $DEBUG;
+      $conf_cache = $cached->get('conf_cache') if $cached;
+      if( ! $conf_cache ) {
         foreach my $c (qsearch('conf')) {
           my $key = join(':',$c->name, $c->agentnum, $c->locale);
-          $self->{'conf_cache'}->{ $key } = $c;
+          $conf_cache->{ $key } = $c;
         }
-        $cached->set('conf_cache', $self->{'conf_cache'}) if $cached;
+        $cached->set('conf_cache', $conf_cache) if $cached;
       }
     }
   }
@@ -158,8 +160,8 @@ sub _config {
     foreach my $l (@l) {
       $hashref->{locale} = $l;
       my $key = join(':',$name, $a, $l);
-      if ($self->{'conf_cache'}->{$key}){ 
-        return $self->{'conf_cache'}->{$key};
+      if ($conf_cache->{$key}){ 
+        return $conf_cache->{$key};
       }
     }
   }
@@ -388,9 +390,9 @@ sub set {
   if (! $error) {
     # clean the object cache
     my $key = join(':',$name, $agentnum, $self->{locale});
-    $self->{'conf_cache'}->{ $key } = $new;
+    $conf_cache->{ $key } = $new;
     my $cached = FS::UID::get_cached;
-    $cached->set('conf_cache', $self->{'conf_cache'}) if $cached;
+    $cached->set('conf_cache', $conf_cache) if $cached;
   }
 
   die "error setting configuration value: $error \n"

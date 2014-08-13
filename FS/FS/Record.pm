@@ -80,8 +80,13 @@ FS::UID->install_callback( sub {
   }
 
   $cached = FS::UID::get_cached;
-  foreach my $table ( dbdef->tables ) {
-    $fk_method_cache{$table} = fk_methods($table);
+  my $cache_cnt = scalar keys %fk_method_cache;
+  if ($cache_cnt < 500) { # There should be over 500 entries in this, if not someone improperly initialized something
+    warn "$me fk_method_cache partially initialized" if $cache_cnt; # shouldn't happen, but if someone uses the cache improperly it can.
+    warn "$me building fk_method_cache" if $DEBUG;
+    foreach my $table ( dbdef->tables ) {
+      $fk_method_cache{$table} = fk_methods($table);
+    }
   }
 
 } );
@@ -1001,8 +1006,7 @@ sub AUTOLOAD {
   confess "errant AUTOLOAD $field for $self (arg $value)"
     unless blessed($self) && $self->can('setfield');
 
-  #$fk_method_cache{$self->table} ||= fk_methods($self->table);
-  if ( exists($fk_method_cache{$self->table}->{$field}) ) {
+  if ( exists($fk_method_cache{$self->table}) && exists($fk_method_cache{$self->table}->{$field}) ) {
 
     my $fk_info = $fk_method_cache{$self->table}->{$field};
     my $method = $fk_info->{method} || 'qsearchs';

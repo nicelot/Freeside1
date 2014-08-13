@@ -166,8 +166,9 @@ sub db_setup {
 sub callback_setup {
 
   unless ( $callback_hack ) {
-    warn "$me calling callbacks\n" if $DEBUG;
+    warn "$me calling ".(scalar keys %callback)." callbacks\n" if $DEBUG;
     foreach ( keys %callback ) {
+      warn "$me calling callback $_\n" if $DEBUG > 1;
       &{$callback{$_}};
       # breaks multi-database installs # delete $callback{$_}; #run once
     }
