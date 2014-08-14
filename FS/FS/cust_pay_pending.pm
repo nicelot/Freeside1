@@ -366,7 +366,7 @@ sub approve {
       'payinfo'     => $self->payinfo,
       'gatewaynum'  => $self->gatewaynum,
   });
-  foreach my $opt_field (qw(processor payinfo auth order_number))
+  foreach my $opt_field (qw(processor payinfo auth order_number agent_transid))
   {
     $cust_pay->set($opt_field, $opt{$opt_field}) if exists $opt{$opt_field};
   }
