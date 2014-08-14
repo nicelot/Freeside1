@@ -1168,7 +1168,6 @@ sub TO_JSON {
   my($self) = @_;
   return $self->{'Hash'};
 }
-
 #fallbacks/generics
 
 sub API_getinfo {
