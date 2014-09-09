@@ -1361,6 +1361,7 @@ sub tables_hashref {
         'commission_salesnum', 'int', 'NULL', '', '', '', #
         'commission_pkgnum',   'int', 'NULL', '', '', '', #
         'credbatch',    'varchar', 'NULL', $char_d, '', '',
+        'agent_creditid',   'int', 'NULL',        '','','',  #agent transaction id
       ],
       'primary_key'  => 'crednum',
       'unique'       => [],
@@ -2898,6 +2899,7 @@ sub tables_hashref {
         'processor',  'varchar', 'NULL', $char_d, '', '', # module name
         'auth',       'varchar','NULL',16, '', '', # CC auth number
         'order_number', 'varchar','NULL',$char_d, '', '', # transaction number
+        'agent_refundid',   'int', 'NULL',        '','','',  #agent transaction id
       ],
       'primary_key'  => 'refundnum',
       'unique'       => [],

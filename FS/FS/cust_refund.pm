@@ -103,6 +103,11 @@ books closed flag, empty or `Y'
 Same as for L<FS::cust_pay>, but specifically the result of realtime 
 authorization of the refund.
 
+=item agent_refundid
+
+Optional element for migrations, refers to old refund id in legacy systems
+
+
 =back
 
 =head1 METHODS
@@ -310,6 +315,7 @@ sub check {
     || $self->ut_numbern('_date')
     || $self->ut_textn('paybatch')
     || $self->ut_enum('closed', [ '', 'Y' ])
+    || $self->ut_numbern('agent_refundid')
   ;
   return $error if $error;
 

@@ -112,6 +112,10 @@ Books closed flag, empty or `Y'
 
 Desired pkgnum when using experimental package balances.
 
+=item agent_creditid
+
+Optional field for migrated data, links to refund id in old system
+
 =back
 
 =head1 METHODS
@@ -321,6 +325,7 @@ sub check {
     || $self->ut_foreign_keyn('commission_agentnum',  'agent', 'agentnum')
     || $self->ut_foreign_keyn('commission_salesnum',  'sales', 'salesnum')
     || $self->ut_foreign_keyn('commission_pkgnum', 'cust_pkg', 'pkgnum')
+    || $self->ut_numbern('agent_creditid')
   ;
   return $error if $error;
 
