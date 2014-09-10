@@ -1366,7 +1366,7 @@ sub tables_hashref {
       'primary_key'  => 'crednum',
       'unique'       => [],
       'index'        => [ ['custnum'], ['_date'], ['usernum'], ['eventnum'],
-                          ['commission_salesnum'], ['credbatch'],
+                          ['commission_salesnum'], ['credbatch'],['agent_creditid'],
                         ],
       'foreign_keys' => [
                           { columns    => [ 'custnum' ],
@@ -2903,7 +2903,7 @@ sub tables_hashref {
       ],
       'primary_key'  => 'refundnum',
       'unique'       => [],
-      'index'        => [ ['custnum'], ['_date'], [ 'usernum' ], ],
+      'index'        => [ ['custnum'], ['_date'], [ 'usernum' ], ['agent_refundid'] ],
       'foreign_keys' => [
                           { columns    => [ 'custnum' ],
                             table      => 'cust_main',
