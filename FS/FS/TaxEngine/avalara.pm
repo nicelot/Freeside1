@@ -183,10 +183,7 @@ sub calculate_taxes {
   my $request_json = $json->encode($request);
   warn $request_json if $DEBUG > 1;
 
-  my $response_json = $gateway->_make_request_json($request_json);
-  warn "received response\n" if $DEBUG;
-  warn $response_json if $DEBUG > 1;
-  my $response = $json->decode($response_json);
+  my $response = $self->do_request( $gateway, $request_json );
  
   my %tax_item_named;
 
@@ -305,6 +302,16 @@ account number, and license key.
   );
   die "No Tax Gateway" unless $gateway;
   return $gateway;
+}
+
+sub do_request {
+  my $self = shift;
+  my ($gateway, $request_json) = @_;
+
+  my $response_json = $gateway->_make_request_json($request_json);
+  warn "received response\n" if $DEBUG;
+  warn $response_json if $DEBUG > 1;
+  return $json->decode($response_json);
 }
 
 1;
