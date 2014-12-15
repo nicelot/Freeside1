@@ -174,25 +174,7 @@ sub calculate_taxes {
     return [];
   }
 
-  # instantiate gateway
-  eval "use Business::Tax::Avalara";
-  die "error loading Business::Tax::Avalara:\n$@\n" if $@;
-
-  my @avalara_conf = $conf->config('avalara-taxconfig');
-  if (scalar @avalara_conf < 3) {
-    die "Your Avalara configuration is incomplete.
-The 'avalara-taxconfig' parameter must have three rows: company code, 
-account number, and license key.
-";
-  }
-
-  my $gateway = Business::Tax::Avalara->new(
-    customer_code   => $self->{cust_main}->custnum,
-    company_code    => $avalara_conf[0],
-    user_name       => $avalara_conf[1],
-    password        => $avalara_conf[2],
-    is_development  => ($avalara_conf[3] ? 1 : 0),
-  );
+  my $gateway = $self->get_gateway;
 
   # assemble the request hash
   my $request = $self->build_request;
@@ -297,6 +279,32 @@ sub add_taxproduct {
   } else {
     return "illegal avalara tax code '$desc'";
   }
+}
+
+sub get_gateway {
+  my $self = shift;
+
+  # instantiate gateway
+  eval "use Business::Tax::Avalara";
+  die "error loading Business::Tax::Avalara:\n$@\n" if $@;
+
+  my @avalara_conf = $conf->config('avalara-taxconfig');
+  if (scalar @avalara_conf < 3) {
+    die "Your Avalara configuration is incomplete.
+The 'avalara-taxconfig' parameter must have three rows: company code, 
+account number, and license key.
+";
+  }
+
+  my $gateway = Business::Tax::Avalara->new(
+    customer_code   => $self->{cust_main}->custnum,
+    company_code    => $avalara_conf[0],
+    user_name       => $avalara_conf[1],
+    password        => $avalara_conf[2],
+    is_development  => ($avalara_conf[3] ? 1 : 0),
+  );
+  die "No Tax Gateway" unless $gateway;
+  return $gateway;
 }
 
 1;
