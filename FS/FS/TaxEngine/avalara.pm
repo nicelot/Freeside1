@@ -179,11 +179,7 @@ sub calculate_taxes {
   # assemble the request hash
   my $request = $self->build_request;
 
-  warn "sending Avalara tax request\n" if $DEBUG;
-  my $request_json = $json->encode($request);
-  warn $request_json if $DEBUG > 1;
-
-  my $response = $self->do_request( $gateway, $request_json );
+  my $response = $self->do_request( $gateway, $request );
  
   my %tax_item_named;
 
@@ -306,9 +302,13 @@ account number, and license key.
 
 sub do_request {
   my $self = shift;
-  my ($gateway, $request_json) = @_;
+  my ($gateway, $request) = @_;
 
+  warn "sending Avalara tax request\n" if $DEBUG;
+  my $request_json = $json->encode($request);
+  warn $request_json if $DEBUG > 1;
   my $response_json = $gateway->_make_request_json($request_json);
+
   warn "received response\n" if $DEBUG;
   warn $response_json if $DEBUG > 1;
   return $json->decode($response_json);
