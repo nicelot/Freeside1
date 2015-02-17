@@ -21,10 +21,15 @@
 %
 %  my $input = $svc->attribute_since_sqlradacct(
 %    $last_bill, time, 'AcctInputOctets'
-%  ) / 1048576;
+%  ) / 1073741824;
 %  my $output = $svc->attribute_since_sqlradacct(
 %    $last_bill, time, 'AcctOutputOctets'
-%  ) / 1048576;
+%  ) / 1073741824;
+%
+%  my $last_mac = $svc->attribute_last_sqlradacct( 'CallingStationId' );
+%  if ( $last_mac =~ /^\s*(([\dA-F]{2}[\-:]){5}[\dA-F]{2})/i ) {
+%    $last_mac .= ' ('. (Net::MAC::Vendor::lookup($1))->[0]. ')';
+%  }
 
 
   RADIUS session information<BR>
@@ -52,10 +57,13 @@
 % } 
 
 
-  Upload: <B><% sprintf("%.3f", $input) %></B> megabytes<BR>
-  Download: <B><% sprintf("%.3f", $output) %></B> megabytes<BR>
+  Upload: <B><% sprintf("%.3f", $input) %></B> gigabytes<BR>
+  Download: <B><% sprintf("%.3f", $output) %></B> gigabytes<BR>
 % if ( $svc->table eq 'svc_acct' ) {
     Last Login: <B><% $svc->last_login_text %></B><BR>
+% }
+% if ( length($last_mac) ) {
+    Last Source or MAC: <B><% $last_mac %></B><BR>
 % }
 % my $href = qq!<A HREF="${p}search/sqlradius.cgi?svcnum=!. $svc->svcnum; 
 

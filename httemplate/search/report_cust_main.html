@@ -43,10 +43,42 @@
       <TD ALIGN="right" VALIGN="center"><% mt('Address') |h %></TD>
       <TD><INPUT TYPE="text" NAME="address" SIZE=54></TD>
     </TR>
+
+    <TR>
+      <TD ALIGN="right" VALIGN="center"><% mt('County') |h %></TD>
+      <TD>
+        <& /elements/select-county.html,
+             disable_empty => 0,
+             empty_label   => '(all)',
+        &>
+      </TD>
+    </TR>
+    
+
+    <TR>
+      <TD ALIGN="right" VALIGN="center"><% mt('State') |h %></TD>
+      <TD>
+        <& /elements/select-state.html,
+             disable_empty => 0,
+             empty_label   => '(all)',
+        &>
+      </TD>
+    </TR>
     
     <TR>
       <TD ALIGN="right" VALIGN="center"><% mt('Zip') |h %></TD>
       <TD><INPUT TYPE="text" NAME="zip" SIZE=12></TD>
+    </TR>
+
+    <TR>
+      <TD ALIGN="right" VALIGN="center"><% mt('Country') |h %></TD>
+      <TD>
+        <& /elements/select-country.html,
+             disable_empty       => 0,
+             state_disable_empty => 0,
+             state_empty_label   => '(all)',
+        &>
+      </TD>
     </TR>
 
     <TR>
@@ -172,13 +204,44 @@
         }
       }
     </SCRIPT>
- 
+
+% my @exempt_groups = grep /\S/, $conf->config('tax-cust_exempt-groups');
+% unless ( @exempt_groups ) { 
+
+%   #falze laziness with With/Without postal mail invoices
+     <TR>
+      <TD ALIGN="right" VALIGN="center"><% mt('Tax exempt') |h %></TD>
+        <TD><INPUT TYPE="checkbox" NAME="tax" ID="tax" onClick="tax_changed();"></TD>
+    </TR>
+
+    <TR>
+      <TD ALIGN="right" VALIGN="center"><% mt('Not tax exempt') |h %></TD>
+        <TD><INPUT TYPE="checkbox" NAME="no_tax" ID="no_tax" onClick="no_tax_changed();"></TD>
+    </TR>
+
+    <SCRIPT TYPE="text/javascript">
+      function  tax_changed() {
+        if ( document.getElementById('tax').checked == true ) {
+          document.getElementById('no_tax').checked = false;
+        }
+      }
+      function no_tax_changed() {
+        if ( document.getElementById('no_tax').checked == true ) {
+          document.getElementById('tax').checked = false;
+        }
+      }
+    </SCRIPT>
+% }
+
     <TR>
       <TD ALIGN="right"><% mt('Invoice terms') |h %></TD>
       <TD>
+%       my @agentnums = $FS::CurrentUser::CurrentUser->agentnums;
+%       my $agentnum = scalar(@agentnums) == 1 ? $agentnums[0] : '';
         <& /elements/select-terms.html,
-                      'pre_options' => [ '' => emt('all') ],
-                      'empty_value' => 'NULL',
+             'pre_options' => [ '' => emt('all') ],
+             'empty_value' => 'NULL',
+             'agentnum'    => $agentnum,
         &>
       </TD>
     </TR>

@@ -46,6 +46,7 @@ sub export_insert {
   my $result = $self->request_user_edit(
     'Add'   => 1,
     $self->svc_acct_params($svc),
+    'db_$N$Users.Status' => 0,
   );
   if ($svc->cust_svc->cust_pkg->susp > 0 ) {
     $result ||= $self->export_suspend($svc);
@@ -55,16 +56,17 @@ sub export_insert {
 
 sub export_replace {
   my ($self, $new, $old) = @_;
-  if ($new->username ne $old->username) {
+  if ($new->email ne $old->email) {
     return $old->export_delete || $new->export_insert;
   }
-  my $UserLockout = 0;
-  $UserLockout = 1 if $new->cust_svc->cust_pkg->susp > 0;
+  my $Status = 0;
+  $Status = 3 if $new->cust_svc->cust_pkg->susp > 0;
   $self->request_user_edit(
     'Page'    => 'UserEdit',
     'Modify'  => 1,
+    'UserID'  => $old->email,
     $self->svc_acct_params($new),
-    UserLockout => $UserLockout,
+    'db_$N$Users.Status' => $Status,
   );
 }
 
@@ -72,8 +74,8 @@ sub export_suspend {
   my ($self, $svc) = @_;
   $self->request_user_edit(
     'Modify'  => 1,
-    'UserID'  => $svc->username,
-    'UserLockout' => 1,
+    'UserID'  => $svc->email,
+    'db_$N$Users.Status' => '3',
   );
 }
 
@@ -81,8 +83,8 @@ sub export_unsuspend {
   my ($self, $svc) = @_;
   $self->request_user_edit(
     'Modify'  => 1,
-    'UserID'  => $svc->username,
-    'UserLockout' => 0,
+    'UserID'  => $svc->email,
+    'db_$N$Users.Status' => 0,
   );
 }
 
@@ -90,7 +92,7 @@ sub export_delete {
   my ($self, $svc) = @_;
   $self->request_user_edit(
     'ConfirmDelete' => 1,
-    ('$Delete$' . $svc->username) => 1,
+    ('$Checked$' . $svc->email) => 1,
   );
 }
 
@@ -118,7 +120,7 @@ sub request_user_edit {
 sub request {
   my $self = shift;
   my @params = @_;
-  my $path = '/Admin'; # I think this is always right
+  my $path = '/ArdWeb/ARDAdminIs.dll'; # I think this is always right
   my $url = URI->new('http://' . $self->host . $path);
   warn "$me request: \n".Dumper(\@params)."\n\n" if $DEBUG >= 2;
   my $response = $self->ua->post($url, \@params);
@@ -148,9 +150,8 @@ sub svc_acct_params {
   my $expire_date = $pkg->expire ? time2str('D%Y-%m-%d', $pkg->expire) : '';
 
   (
-    'db_Users.UserID'               => $svc->username,
+    'db_Users.UserID'               => $svc->email,
     $self->password_params($svc),
-    'db_$N$Users.Status'            => 0, # we suspend using UserLockout
     'db_$D$Users.StartDate'         => $setup_date,
     'db_$D$Users.UserExpiryDate'    => $expire_date,
     'db_$RS$Users.GroupName'        => $self->option('group'),

@@ -148,6 +148,11 @@
   </TR>
 
   <TR>
+    <TD ALIGN="right">Acct Code (one per-line):</TD>
+    <TD><TEXTAREA NAME="accountcode"></TEXTAREA></TD>
+  </TR>
+
+  <TR>
     <TH CLASS="background" COLSPAN=2>&nbsp;</TH>
   </TR>
 
@@ -185,6 +190,10 @@ die "access denied"
 my @fields = fields('cdr');
 my $labels = FS::cdr->table_info->{'fields'};
 
+my $conf = new FS::Conf;
+my $default_phone_countrycode =
+  $conf->config('default_phone_countrycode') || '1';
+
 #XXX config
 my @show_default = qw(
   calldate clid src dst dcontext charged_party
@@ -217,7 +226,7 @@ if ( $cgi->param('custnum') =~ /^(\d+)$/ ) {
   });
   die "Customer not found!" unless $cust_main;
 
-  #historical?
+  #historical packages?  It would help, it was still usage, it happened
   foreach my $cust_pkg ( $cust_main->ncancelled_pkgs ) {
 
     my @voip_pkgs =
@@ -242,7 +251,7 @@ if ( $cgi->param('custnum') =~ /^(\d+)$/ ) {
       my @numbers = map {
                           my $number = $_->phonenum;
                           $number = $_->countrycode. $number
-                            unless $_->countrycode eq '1';
+                           unless $_->countrycode eq $default_phone_countrycode;
                           $number;
                         }
                       @svc_phone;

@@ -13,11 +13,23 @@ use vars qw(%info %options $initial_load_hack $DEBUG);
 
 my %upload_targets;
 
+tie our %parsing_rules, 'Tie::IxHash', (
+  'no_street_suffix' => 'Avoid street suffix',
+  'no_postdir'       => 'Avoid post directional',
+  # add others as we learn about them
+);
+
 tie %options, 'Tie::IxHash', (
   'company_name'    => {  label => 'Company name for header record',
-                          type  => 'text'
+                          type  => 'text',
                        },
   'company_id'      => {  label => 'NENA company ID',
+                          type  => 'text',
+                       },
+  'customer_code'   => {  label => 'Customer code',
+                          type  => 'text',
+                       },
+  'area_code'       => {  label => 'Default area code for 7 digit numbers',
                           type  => 'text',
                        },
   'prefix'          => {  label => 'File name prefix',
@@ -45,7 +57,14 @@ tie %options, 'Tie::IxHash', (
                        },
   'debug'           => { label => 'Enable debugging',
                          type => 'checkbox' },
+  'parsing_rules'   => { label => 'Address parsing rules',
+                         type => 'title' },
+
+  map({ $_ => { label => $parsing_rules{$_}, type => 'checkbox' } }
+    keys %parsing_rules
+  ),
 );
+
 
 %info = (
   'svc'       => 'svc_phone',
@@ -163,15 +182,6 @@ my %function_code = (
 );
 
 sub immediate {
-  local $@;
-  eval "use Geo::StreetAddress::US";
-  if ($@) {
-    if ($@ =~ /^Can't locate/) {
-      return "Geo::StreetAddress::US must be installed to use the NENA2 export.";
-    } else {
-      die $@;
-    }
-  }
 
   # validate some things
   my ($self, $action, $svc) = @_;
@@ -203,6 +213,15 @@ sub create_item {
 }
 
 sub data {
+  local $@;
+  eval "use Geo::StreetAddress::US";
+  if ($@) {
+    if ($@ =~ /^Can't locate/) {
+      return "Geo::StreetAddress::US must be installed to use the NENA2 export.";
+    } else {
+      die $@;
+    }
+  }
   # generate the entire record here.  reconciliation of multiple updates to 
   # the same service can be done at process time.
   my $self = shift;
@@ -215,43 +234,116 @@ sub data {
   my $cust_location = FS::cust_location->by_key($locationnum);
 
   # initialize with empty strings
-  my %hash = map { $_ => '' } $item_format->names;
+  my %hash = map { $_ => '' } @{ $item_format->names };
 
   $hash{function_code} = $function_code{$action};
-
-  # phone number 
-  $svc->phonenum =~ /^(\d{3})(\d*)$/;
+  
+  # Add default area code if phonenum is 7 digits
+  my $phonenum = $svc->phonenum;
+  if ($self->option('area_code') =~ /^\d{3}$/ && $phonenum =~ /^\d{7}$/ ){
+  $phonenum = $self->option('area_code'). $svc->phonenum;
+  }
+ 
+  # phone number
+  $phonenum =~ /^(\d{3})(\d*)$/;
   $hash{npa} = $1;
   $hash{calling_number} = $2;
 
   # street address
+  # some cleanup:
+  my $full_address = $cust_location->address1;
+  my $address2 = $cust_location->address2;
+  if (length($address2)) {
+    # correct 'Sp', 'Sp.', 'sp ', etc. to the word SPACE for convenience
+    $address2 =~ s/^sp\b\.? ?/SPACE /i;
+    # and join it to $full_address with a space, not a comma
+    $full_address .= ' ' . $address2;
+  }
+
+  Geo::StreetAddress::US->avoid_redundant_street_type(1);
+
   my $location_hash = Geo::StreetAddress::US->parse_address(
-    uc( join(', ', $cust_location->address1,
-                   $cust_location->address2,
-                   $cust_location->city,
-                   $cust_location->state,
-                   $cust_location->zip
+    uc( join(', ',  $full_address,
+                    $cust_location->city,
+                    $cust_location->state,
+                    $cust_location->zip
     ) )
   );
-  $hash{house_number}         = $location_hash->{number};
-  $hash{house_number_suffix}  = ''; # we don't support this, do we?
-  $hash{prefix_directional}   = $location_hash->{prefix};
-  $hash{street_name}          = $location_hash->{street};
-  $hash{street_suffix}        = $location_hash->{type};
-  $hash{post_directional}     = $location_hash->{suffix};
-  $hash{community_name}       = $location_hash->{city};
-  $hash{state}                = $location_hash->{state};
-  if ($location_hash->{sec_unit_type}) {
-    $hash{location} = $location_hash->{sec_unit_type} . ' ' .
-                      $location_hash->{sec_unit_num};
-  } else {
-    $hash{location} = $cust_location->address2;
+  if ( length($address2) ) {
+    # be careful how we handle this
+    if ( !defined $location_hash ) {
+      # then it did successfully parse. BUT.
+      # if there's no sec_unit_type, then the address2 was parsed as part
+      # of the street name, which is wrong. Then reparse.
+      if ( !$location_hash->{sec_unit_type} ) {
+        undef $location_hash;
+      }
+    }
+    # then parsing failed. Try again without the address2.
+    $location_hash = Geo::StreetAddress::US->parse_address(
+      uc( join(', ',
+                    $cust_location->address1,
+                    $cust_location->city,
+                    $cust_location->state,
+                    $cust_location->zip
+      ) )
+    );
+    # this should not produce an address with sec_unit_type,
+    # so 'location' will be set to address2
   }
-  $hash{location}             = $location_hash->{address2};
+  if ( $location_hash ) {
+    # then store it
+    $hash{house_number}         = $location_hash->{number};
+    $hash{house_number_suffix}  = ''; # we don't support this, do we?
+    $hash{prefix_directional}   = $location_hash->{prefix};
+    $hash{street_name}          = $location_hash->{street};
+    $hash{community_name}       = $location_hash->{city};
+    $hash{state}                = $location_hash->{state};
+
+    if ($location_hash->{sec_unit_type}) {
+      $hash{location} = $location_hash->{sec_unit_type} . ' ' .
+                        $location_hash->{sec_unit_num};
+    } else {
+      # if sec_unit_type was not set, then put address2 in 'location'
+      $hash{location} = $address2;
+    }
+
+    if ( $self->option('no_street_suffix') and $location_hash->{type} ) {
+      my $type = $location_hash->{type};
+      $hash{street_name}  .= ' ' . uc($location_hash->{type});
+    } else {
+      $hash{street_suffix} = uc($location_hash->{type});
+    }
+
+    if ( $self->option('no_postdir') and $location_hash->{suffix} ) {
+      $hash{street_name}  .= ' ' . $location_hash->{suffix};
+    } else {
+      $hash{post_directional} = $location_hash->{suffix};
+    }
+
+  } else {
+    # then it still wouldn't parse; happens when the address has no house
+    # number (which is allowed in NENA 2 format). so just put all the 
+    # information we have into the record. (Parse::FixedLength will trim
+    # it to fit if necessary.)
+    $hash{street_name}    = uc($cust_location->address1);
+    $hash{location}       = uc($address2);
+    $hash{community_name} = uc($cust_location->city);
+    $hash{state}          = uc($cust_location->state);
+  }
 
   # customer name and class
   $hash{customer_name} = $svc->phone_name_or_cust;
   $hash{class_of_service} = $svc->e911_class;
+  if (!$hash{class_of_service}) {
+    # then guess
+    my $cust_main = $svc->cust_main;
+    if ($cust_main->company) {
+      $hash{class_of_service} = '2';
+    } else {
+      $hash{class_of_service} = '1';
+    }
+  }
   $hash{type_of_service}  = $svc->e911_type || '0';
 
   $hash{exchange} = '';
@@ -277,13 +369,11 @@ sub data {
   # so we can't comply.  NENA 3 fixed this...
 
   $hash{company_id} = $self->option('company_id');
+  $hash{customer_code} = $self->option('customer_code') || '';
   $hash{source_id} = $initial_load_hack ? 'C' : ' ';
 
-  @hash{'zip', 'zip_'} = split('-', $cust_location->zip);
-  
-  # $hash{customer_code} is supposed to "uniquely identify a customer" but 
-  # they give us 3 alphanumeric characters.  Not sure how that works.
-
+  @hash{'zip_code', 'zip_4'} = split('-', $cust_location->zip);
+ 
   $hash{x_coordinate} = $cust_location->longitude;
   $hash{y_coordinate} = $cust_location->latitude;
   # $hash{z_coordinate} = $cust_location->altitude; # not implemented, sadly

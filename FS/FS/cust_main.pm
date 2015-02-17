@@ -17,19 +17,9 @@ use base qw( FS::cust_main::Packages
 
 require 5.006;
 use strict;
-use vars qw( $DEBUG $me $conf
-             @encrypted_fields
-             $import
-             $ignore_expired_card $ignore_banned_card $ignore_illegal_zip
-             $ignore_invalid_card
-             $skip_fuzzyfiles
-             @paytypes
-           );
 use Carp;
 use Scalar::Util qw( blessed );
 use Time::Local qw(timelocal);
-use Storable qw(thaw);
-use MIME::Base64;
 use Data::Dumper;
 use Tie::IxHash;
 use Digest::MD5 qw(md5_base64);
@@ -61,6 +51,7 @@ use FS::part_referral;
 use FS::cust_main_county;
 use FS::cust_location;
 use FS::cust_class;
+use FS::tax_status;
 use FS::cust_main_exemption;
 use FS::cust_tax_adjustment;
 use FS::cust_tax_location;
@@ -87,21 +78,24 @@ use FS::cust_payby;
 # 1 is mostly method/subroutine entry and options
 # 2 traces progress of some operations
 # 3 is even more information including possibly sensitive data
-$DEBUG = 0;
-$me = '[FS::cust_main]';
+our $DEBUG = 0;
+our $me = '[FS::cust_main]';
 
-$import = 0;
-$ignore_expired_card = 0;
-$ignore_banned_card = 0;
-$ignore_invalid_card = 0;
+our $import = 0;
+our $ignore_expired_card = 0;
+our $ignore_banned_card = 0;
+our $ignore_invalid_card = 0;
 
-$skip_fuzzyfiles = 0;
+our $skip_fuzzyfiles = 0;
 
-@encrypted_fields = ('payinfo', 'paycvv');
+our $ucfirst_nowarn = 0;
+
+our @encrypted_fields = ('payinfo', 'paycvv');
 sub nohistory_fields { ('payinfo', 'paycvv'); }
 
-@paytypes = ('', 'Personal checking', 'Personal savings', 'Business checking', 'Business savings');
+our @paytypes = ('', 'Personal checking', 'Personal savings', 'Business checking', 'Business savings');
 
+our $conf;
 #ask FS::UID to run this stuff for us later
 #$FS::UID::callback{'FS::cust_main'} = sub { 
 install_callback FS::UID sub { 
@@ -414,14 +408,9 @@ sub insert {
 
   # insert locations
   foreach my $l (qw(bill_location ship_location)) {
-    my $loc = delete $self->hashref->{$l};
-    # XXX if we're moving a prospect's locations, do that here
-    if ( !$loc ) {
-      #return "$l not set";
-      #location-less customer records are now permitted
-      next;
-    }
-    
+
+    my $loc = delete $self->hashref->{$l} or next;
+
     if ( !$loc->locationnum ) {
       # warn the location that we're going to insert it with no custnum
       $loc->set(custnum_pending => 1);
@@ -433,8 +422,19 @@ sub insert {
         my $label = $l eq 'ship_location' ? 'service' : 'billing';
         return "$error (in $label location)";
       }
-    }
-    elsif ( ($loc->custnum || 0) > 0 or $loc->prospectnum ) {
+
+    } elsif ( $loc->prospectnum ) {
+
+      $loc->prospectnum('');
+      $loc->set(custnum_pending => 1);
+      my $error = $loc->replace;
+      if ( $error ) {
+        $dbh->rollback if $oldAutoCommit;
+        my $label = $l eq 'ship_location' ? 'service' : 'billing';
+        return "$error (moving $label location)";
+      }
+
+    } elsif ( ($loc->custnum || 0) > 0 ) {
       # then it somehow belongs to another customer--shouldn't happen
       $dbh->rollback if $oldAutoCommit;
       return "$l belongs to customer ".$loc->custnum;
@@ -1740,6 +1740,7 @@ sub check {
     || $self->ut_foreign_keyn('ship_locationnum', 'cust_location','locationnum')
     || $self->ut_foreign_keyn('classnum', 'cust_class', 'classnum')
     || $self->ut_foreign_keyn('salesnum', 'sales', 'salesnum')
+    || $self->ut_foreign_keyn('taxstatusnum', 'tax_status', 'taxstatusnum')
     || $self->ut_textn('custbatch')
     || $self->ut_name('last')
     || $self->ut_name('first')
@@ -2093,6 +2094,7 @@ Returns a list of fields which have ship_ duplicates.
 
 sub addr_fields {
   qw( last first company
+      locationname
       address1 address2 city county state zip country
       latitude longitude
       daytime night fax mobile
@@ -2165,14 +2167,27 @@ sub cust_payby {
 =item unsuspend
 
 Unsuspends all unflagged suspended packages (see L</unflagged_suspended_pkgs>
-and L<FS::cust_pkg>) for this customer.  Always returns a list: an empty list
-on success or a list of errors.
+and L<FS::cust_pkg>) for this customer, except those on hold.
+
+Returns a list: an empty list on success or a list of errors.
 
 =cut
 
 sub unsuspend {
   my $self = shift;
-  grep { $_->unsuspend } $self->suspended_pkgs;
+  grep { ($_->get('setup')) && $_->unsuspend } $self->suspended_pkgs;
+}
+
+=item release_hold
+
+Unsuspends all suspended packages in the on-hold state (those without setup 
+dates) for this customer. 
+
+=cut
+
+sub release_hold {
+  my $self = shift;
+  grep { (!$_->setup) && $_->unsuspend } $self->suspended_pkgs;
 }
 
 =item suspend
@@ -2422,6 +2437,36 @@ sub classname {
   my $cust_class = $self->cust_class;
   $cust_class
     ? $cust_class->classname
+    : '';
+}
+
+=item tax_status
+
+Returns the external tax status, as an FS::tax_status object, or the empty 
+string if there is no tax status.
+
+=cut
+
+sub tax_status {
+  my $self = shift;
+  if ( $self->taxstatusnum ) {
+    qsearchs('tax_status', { 'taxstatusnum' => $self->taxstatusnum } );
+  } else {
+    return '';
+  } 
+}
+
+=item taxstatus
+
+Returns the tax status code if there is one.
+
+=cut
+
+sub taxstatus {
+  my $self = shift;
+  my $tax_status = $self->tax_status;
+  $tax_status
+    ? $tax_status->taxstatus
     : '';
 }
 
@@ -2838,13 +2883,19 @@ UNIX timestamps; see L<perlfunc/"time">).  Also see L<Time::Local> and
 L<Date::Parse> for conversion functions.  The empty string can be passed
 to disable that time constraint completely.
 
-Available options are:
+Accepts the same options as L<balance_date_sql>:
 
 =over 4
 
 =item unapplied_date
 
 set to true to disregard unapplied credits, payments and refunds outside the specified time period - by default the time period restriction only applies to invoices (useful for reporting, probably a bad idea for event triggering)
+
+=item cutoff
+
+An absolute cutoff time.  Payments, credits, and refunds I<applied> after this 
+time will be ignored.  Note that START_TIME and END_TIME only limit the date 
+range for invoices and I<unapplied> payments, credits, and refunds.
 
 =back
 
@@ -3425,7 +3476,7 @@ Old-style:
 
 sub charge {
   my $self = shift;
-  my ( $amount, $quantity, $start_date, $classnum );
+  my ( $amount, $setup_cost, $quantity, $start_date, $classnum );
   my ( $pkg, $comment, $additional );
   my ( $setuptax, $taxclass );   #internal taxes
   my ( $taxproduct, $override ); #vendor (CCH) taxes
@@ -3435,6 +3486,7 @@ sub charge {
   my $locationnum;
   if ( ref( $_[0] ) ) {
     $amount     = $_[0]->{amount};
+    $setup_cost = $_[0]->{setup_cost};
     $quantity   = exists($_[0]->{quantity}) ? $_[0]->{quantity} : 1;
     $start_date = exists($_[0]->{start_date}) ? $_[0]->{start_date} : '';
     $no_auto    = exists($_[0]->{no_auto}) ? $_[0]->{no_auto} : '';
@@ -3453,6 +3505,7 @@ sub charge {
     $locationnum = $_[0]->{locationnum} || $self->ship_locationnum;
   } else {
     $amount     = shift;
+    $setup_cost = '';
     $quantity   = 1;
     $start_date = '';
     $pkg        = @_ ? shift : 'One-time charge';
@@ -3483,6 +3536,7 @@ sub charge {
     'setuptax'      => $setuptax,
     'taxclass'      => $taxclass,
     'taxproductnum' => $taxproduct,
+    'setup_cost'    => $setup_cost,
   } );
 
   my %options = ( ( map { ("additional_info$_" => $additional->[$_] ) }
@@ -3771,9 +3825,17 @@ Returns all the payments (see L<FS::cust_pay>) for this customer.
 
 sub cust_pay {
   my $self = shift;
-  return $self->num_cust_pay unless wantarray;
-  sort { $a->_date <=> $b->_date }
-    qsearch( 'cust_pay', { 'custnum' => $self->custnum } )
+  my $opt = ref($_[0]) ? shift : { @_ };
+
+  return $self->num_cust_pay unless wantarray || keys %$opt;
+
+  $opt->{'table'} = 'cust_pay';
+  $opt->{'hashref'}{'custnum'} = $self->custnum;
+
+  map { $_ } #behavior of sort undefined in scalar context
+    sort { $a->_date <=> $b->_date }
+      qsearch($opt);
+
 }
 
 =item num_cust_pay
@@ -3789,6 +3851,22 @@ sub num_cust_pay {
   my $sth = dbh->prepare($sql) or die dbh->errstr;
   $sth->execute($self->custnum) or die $sth->errstr;
   $sth->fetchrow_arrayref->[0];
+}
+
+=item unapplied_cust_pay
+
+Returns all the unapplied payments (see L<FS::cust_pay>) for this customer.
+
+=cut
+
+sub unapplied_cust_pay {
+  my $self = shift;
+
+  $self->cust_pay(
+    'extra_sql' => ' AND '. FS::cust_pay->unapplied_sql. ' > 0',
+    #@_
+  );
+
 }
 
 =item cust_pay_pkgnum
@@ -4150,17 +4228,29 @@ Returns a status string for this customer, currently:
 
 =over 4
 
-=item prospect - No packages have ever been ordered
+=item prospect
 
-=item ordered - Recurring packages all are new (not yet billed).
+No packages have ever been ordered.  Displayed as "No packages".
 
-=item active - One or more recurring packages is active
+=item ordered
 
-=item inactive - No active recurring packages, but otherwise unsuspended/uncancelled (the inactive status is new - previously inactive customers were mis-identified as cancelled)
+Recurring packages all are new (not yet billed).
 
-=item suspended - All non-cancelled recurring packages are suspended
+=item active
 
-=item cancelled - All recurring packages are cancelled
+One or more recurring packages is active.
+
+=item inactive
+
+No active recurring packages, but otherwise unsuspended/uncancelled (the inactive status is new - previously inactive customers were mis-identified as cancelled).
+
+=item suspended
+
+All non-cancelled recurring packages are suspended.
+
+=item cancelled
+
+All recurring packages are cancelled.
 
 =back
 
@@ -4187,15 +4277,37 @@ sub cust_status {
 
 =item ucfirst_status
 
+Deprecated, use the cust_status_label method instead.
+
 Returns the status with the first character capitalized.
 
 =cut
 
-sub ucfirst_status { shift->ucfirst_cust_status(@_); }
+sub ucfirst_status {
+  carp "ucfirst_status deprecated, use cust_status_label" unless $ucfirst_nowarn;
+  local($ucfirst_nowarn) = 1;
+  shift->ucfirst_cust_status(@_);
+}
 
 sub ucfirst_cust_status {
+  carp "ucfirst_cust_status deprecated, use cust_status_label" unless $ucfirst_nowarn;
   my $self = shift;
   ucfirst($self->cust_status);
+}
+
+=item cust_status_label
+
+=item status_label
+
+Returns the display label for this status.
+
+=cut
+
+sub status_label { shift->cust_status_label(@_); }
+
+sub cust_status_label {
+  my $self = shift;
+  __PACKAGE__->statuslabels->{$self->cust_status};
 }
 
 =item statuscolor
@@ -4948,9 +5060,24 @@ sub queued_bill {
   $cust_main->bill_and_collect( %args );
 }
 
+=item queued_collect 'custnum' => CUSTNUM [ , OPTION => VALUE ... ]
+
+Like queued_bill, but instead of C<bill_and_collect>, just runs the 
+C<collect> part.  This is used in batch tax calculation, where invoice 
+generation and collection events have to be completely separated.
+
+=cut
+
+sub queued_collect {
+  my (%args) = @_;
+  my $cust_main = FS::cust_main->by_key($args{'custnum'});
+  
+  $cust_main->collect(%args);
+}
+
 sub process_bill_and_collect {
   my $job = shift;
-  my $param = thaw(decode_base64(shift));
+  my $param = shift;
   my $cust_main = qsearchs( 'cust_main', { custnum => $param->{'custnum'} } )
       or die "custnum '$param->{custnum}' not found!\n";
   $param->{'job'}   = $job;

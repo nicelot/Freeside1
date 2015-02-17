@@ -161,6 +161,8 @@ following fields are currently supported:
 
 =item cdrbatch
 
+=item detailnum - Link to invoice detail (L<FS::cust_bill_pkg_detail>)
+
 =back
 
 =head1 METHODS
@@ -226,6 +228,7 @@ sub table_info {
         'freesiderewritestatus' => 'Freeside rewrite status',
         'cdrbatch'              => 'Legacy batch',
         'cdrbatchnum'           => 'Batch',
+        'detailnum'             => 'Freeside invoice detail line',
     },
 
   };
@@ -337,8 +340,12 @@ sub check {
 
   #check the foreign keys even?
   #do we want to outright *reject* the CDR?
-  my $error =
-       $self->ut_numbern('acctid');
+  my $error = $self->ut_numbern('acctid');
+  return $error if $error;
+
+  if ( $self->freesidestatus ne 'done' ) {
+    $self->set('detailnum', ''); # can't have this on an unbilled call
+  }
 
   #add a config option to turn these back on if someone needs 'em
   #
@@ -350,8 +357,6 @@ sub check {
   #
   #  # Telstra =1, Optus = 2, RSL COM = 3
   #  || $self->ut_foreign_keyn('carrierid', 'cdr_carrier', 'carrierid' )
-
-  return $error if $error;
 
   $self->SUPER::check;
 }
@@ -368,9 +373,9 @@ to inspect other field.
 sub is_tollfree {
   my $self = shift;
   my $field = scalar(@_) ? shift : 'dst';
-  my $country = $conf->config('tollfree-country');
+  my $country = $conf->config('tollfree-country') || '';
   if ( $country eq 'AU' ) { 
-    ( $self->$field() =~ /^(\+?61)?1800/ ) ? 1 : 0;
+    ( $self->$field() =~ /^(\+?61)?(1800|1300)/ ) ? 1 : 0;
   } elsif ( $country eq 'NZ' ) { 
     ( $self->$field() =~ /^(\+?64)?(800|508)/ ) ? 1 : 0;
   } else { #NANPA (US/Canaada)
@@ -799,8 +804,8 @@ sub rate_prefix {
 
   }
 
+  my $regionnum = $rate_detail->dest_regionnum;
   my $rate_region = $rate_detail->dest_region;
-  my $regionnum = $rate_region->regionnum;
   warn "  found rate for regionnum $regionnum ".
        "and rate detail $rate_detail\n"
     if $DEBUG;
@@ -841,6 +846,11 @@ sub rate_prefix {
   #my $seconds = 0;
   my $charge = 0;
   my $connection_charged = 0;
+
+  # before doing anything else, if there's an upstream multiplier and 
+  # an upstream price, add that to the charge. (usually the rate detail 
+  # will then have a minute charge of zero, but not necessarily.)
+  $charge += ($self->upstream_price || 0) * $rate_detail->upstream_mult_charge;
 
   my $etime;
   while($seconds_left) {
@@ -989,7 +999,7 @@ sub rate_prefix {
     $price,
     $opt{'svcnum'},
     'rated_pretty_dst'    => $pretty_dst,
-    'rated_regionname'    => $rate_region->regionname,
+    'rated_regionname'    => ($rate_region ? $rate_region->regionname : ''),
     'rated_seconds'       => $rated_seconds, #$seconds,
     'rated_granularity'   => $rate_detail->sec_granularity, #$granularity
     'rated_ratedetailnum' => $rate_detail->ratedetailnum,
@@ -1073,10 +1083,15 @@ sub rate_cost {
   my $rate_detail =
     qsearchs('rate_detail', { 'ratedetailnum' => $self->rated_ratedetailnum } );
 
-  return $rate_detail->min_cost if $self->rated_granularity == 0;
+  my $charge = 0;
+  $charge += ($self->upstream_price || 0) * ($rate_detail->upstream_mult_cost);
 
-  my $minutes = $self->rated_seconds / 60;
-  my $charge = $rate_detail->conn_cost + $minutes * $rate_detail->min_cost;
+  if ( $self->rated_granularity == 0 ) {
+    $charge += $rate_detail->min_cost;
+  } else {
+    my $minutes = $self->rated_seconds / 60;
+    $charge += $rate_detail->conn_cost + $minutes * $rate_detail->min_cost;
+  }
 
   sprintf('%.2f', $charge + .00001 );
 
@@ -1617,7 +1632,7 @@ sub _cdr_date_parse {
     # optionally without seconds
     ($mon, $day, $year, $hour, $min, $sec) = ( $1, $2, $3, $4, $5, $6 );
     $sec = 0 if !defined($sec);
-  } elsif ( $date  =~ /^\s*(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d+\.\d+)(\D|$)/ ) {
+   } elsif ( $date  =~ /^\s*(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\.\d+)$/ ) {
     # broadsoft: 20081223201938.314
     ($year, $mon, $day, $hour, $min, $sec) = ( $1, $2, $3, $4, $5, $6 );
   } elsif ( $date  =~ /^\s*(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\d+(\D|$)/ ) {
@@ -1627,7 +1642,7 @@ sub _cdr_date_parse {
     # WIP: 20100329121420
     ($year, $mon, $day, $hour, $min, $sec) = ( $1, $2, $3, $4, $5, $6 );
   } elsif ( $date =~ /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/) {
-    # Telos
+    # Telos 2014-10-10T05:30:33Z
     ($year, $mon, $day, $hour, $min, $sec) = ( $1, $2, $3, $4, $5, $6 );
     $options{gmt} = 1;
   } else {

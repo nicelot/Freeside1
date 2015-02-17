@@ -44,12 +44,14 @@
                    'plan'             => 'Price plan',
                    'disabled'         => 'Disable new orders',
                    'disable_line_item_date_ranges' => 'Disable line item date ranges',
+                   'start_on_hold'    => 'Start on hold',
                    'setup_cost'       => 'Setup cost',
                    'recur_cost'       => 'Recur cost',
                    'pay_weight'       => 'Payment weight',
                    'credit_weight'    => 'Credit weight',
                    'agent_pkgpartid'  => 'External ID',
                    'agentnum'         => 'Agent',
+                   'agent_type'       => ' ', #just its title headingn is fine
                    'setup_fee'        => 'Setup fee',
                    'setup_show_zero'  => 'Show zero setup',
                    'recur_fee'        => 'Recurring fee',
@@ -110,6 +112,10 @@
                      ),
                      {field=>'disabled', type=>$disabled_type, value=>'Y'},
                      {field=>'disable_line_item_date_ranges', type=>$disabled_type, value=>'Y'},
+                     { field => 'start_on_hold',
+                       type => 'checkbox',
+                       value => 'Y'
+                     },
 
                      { type     => 'tablebreak-tr-title',
                        value    => 'Pricing', #better name?
@@ -222,9 +228,13 @@
 
                    { type => 'columnnext' },
 
-                     { field    => 'agent_type',
-                       type     => 'select-agent_types',
-                       disabled => ! $acl_edit_global,
+                     {type=>'justtitle', value=>'Agent (reseller) types' },
+
+                     { field       => 'agent_type',
+                       type        => 'select-agent_type',
+                       disabled    => ! $acl_edit_global,
+                       element_etc => 'size="10"',
+                       multiple    =>  '1', #cause edit.html is dum
                        curr_value_callback => sub {
                          my($cgi, $object, $field) = @_;
                          #in the other callbacks..?  hmm.
@@ -232,23 +242,26 @@
                        },
                      },
 
-                     { type  => 'tablebreak-tr-title',
-                       value => 'FCC Form 477 information',
-                     },
-                     { field => 'fcc_options_string',
-                       type  => 'input-fcc_options',
-                       curr_value_callback => sub {
-                         my ($cgi, $part_pkg, $fref) = @_;
-                         if ( $cgi->param('fcc_options_string') ) {
-                           # error redirect
-                           return $cgi->param('fcc_options_string');
-                         }
-                         my %hash;
-                         %hash = $part_pkg->fcc_options 
-                           if ($part_pkg->pkgpart);
-                         return encode_json(\%hash);
+                     ($fcc_opts ? (
+                       { type  => 'tablebreak-tr-title',
+                         value => 'FCC Form 477 information',
                        },
-                     },
+                       { field => 'fcc_options_string',
+                         type  => 'input-fcc_options',
+                         curr_value_callback => sub {
+                           my ($cgi, $part_pkg, $fref) = @_;
+                           if ( $cgi->param('fcc_options_string') ) {
+                             # error redirect
+                             return $cgi->param('fcc_options_string');
+                           }
+                           my %hash;
+                           %hash = $part_pkg->fcc_options 
+                             if ($part_pkg->pkgpart);
+                           return encode_json(\%hash);
+                         },
+                       },
+                       ) : ()
+                     ),
 
                      { type  => 'tablebreak-tr-title',
                        value => 'External Links', #better name?
@@ -404,6 +417,8 @@ my $agent_clone_extra_sql =
 
 my $conf = new FS::Conf;
 my $taxproducts = $conf->exists('enable_taxproducts');
+
+my $fcc_opts = $conf->exists('part_pkg-show_fcc_options');
 
 my @locales = grep { ! /^en_/i } $conf->config('available-locales'); #should filter from the default locale lang instead of en_
 my %locale_labels =  map {
@@ -639,8 +654,7 @@ my $new_callback = sub {
   my $conf = new FS::Conf; 
 
   if ( $conf->exists('agent_defaultpkg') ) {
-    #my @all_agent_types = map {$_->typenum} qsearch('agent_type',{});
-    @agent_type = map {$_->typenum} qsearch('agent_type',{});
+    @agent_type = map {$_->typenum} qsearch('agent_type', { 'disabled'=>'' });
   }
 
   $options{'suspend_bill'}=1 if $conf->exists('part_pkg-default_suspend_bill');
@@ -878,6 +892,11 @@ my $javascript = <<'END';
         button.style.border = '1px solid #7e0079';
         button.style.padding = '1px';
       }
+    }
+
+    function finish_edit_fcc(id) {
+      cClick();
+      show_fcc_options(id); // refresh the display
     }
 
 END

@@ -78,22 +78,6 @@ Interface
     </TD>
   </TR>
 
-  <TR>
-    <TH ALIGN="right">Hide package changes: </TH>
-    <TD>
-    <& /elements/select.html,
-      field   => 'hide_package_changes',
-      options => [ '', 'location', 'all' ],
-      labels  => { ''         => 'never',
-                   'location' => 'location changes',
-                   'all'      => 'all package changes',
-                 },
-      curr_value => ($cgi->param('hide_package_changes') 
-                      || $curuser->option('hide_package_changes')),
-    &>
-    </TD>
-  </TR>
-
 % my $history_order = $curuser->option('history_order') || 'oldest';
   <TR>
     <TH ALIGN="right">Customer history sort order: </TH>
@@ -157,6 +141,13 @@ Interface
     <TH ALIGN="right">Don't copy MAC address delimiters to clipboard</TH>
     <TD ALIGN="left" COLSPAN=2>
       <INPUT TYPE="checkbox" NAME="enable_mask_clipboard_hack" VALUE="1" <% $curuser->option('enable_mask_clipboard_hack') ? 'CHECKED' : '' %>>
+    </TD>
+  </TR>
+
+  <TR>
+    <TH ALIGN="right">How many recently-modified customers displayed on dashboard</TH>
+    <TD ALIGN="left" COLSPAN=2>
+      <INPUT TYPE="text" NAME="dashboard_customers" VALUE="<% $curuser->option('dashboard_customers') %>"></TD>
     </TD>
   </TR>
 
@@ -290,7 +281,7 @@ $customer_views{'Jumbo'} = 'jumbo';
   =~ /^(\w+)$/ or die "illegal menu_position";
 my $menu_position = $1;
 ( $curuser->option('email_address') )
-  =~ /^([,\w\@.]*)$/ or die "illegal email_address";  #too late
+  =~ /^([,\w\@.\-]*)$/ or die "illegal email_address";  #too late
 my $email_address = $1;
 
 </%init>

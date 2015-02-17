@@ -1,0 +1,286 @@
+<TABLE CLASS="fsinnerbox">
+
+<TR>
+  <TD ALIGN="right">Residential</TD>
+  <TD><INPUT TYPE     = "radio"
+             NAME     = "residential_commercial"
+             ID       = "residential_commercial_Residential"
+             VALUE    = "Residential"
+             onChange = "rescom_changed(this)"
+       <% $cust_main->residential_commercial eq 'Commercial' ? '' : 'CHECKED' %>
+  ></TD>
+</TR>
+<TR>
+  <TD ALIGN="right">Commercial</TD>
+  <TD><INPUT TYPE     = "radio"
+             NAME     = "residential_commercial"
+             ID       = "residential_commercial_Commercial"
+             VALUE    = "Commercial"
+             onChange = "rescom_changed(this)"
+       <% $cust_main->residential_commercial eq 'Commercial' ? 'CHECKED' : '' %>
+  ></TD>
+</TR>
+
+<SCRIPT TYPE="text/javascript">
+
+  function rescom_changed(what) {
+    if ( what.checked == (what.value == 'Commercial' ) ) {
+      document.getElementById('company_row').style.display = '';
+      document.getElementById('contacts_div').style.display = '';
+      document.getElementById('spouse_row').style.display = 'none';
+    } else {
+      if ( document.getElementById('company').value.length == 0 ) {
+        document.getElementById('company_row').style.display = 'none';
+      }
+      document.getElementById('contacts_div').style.display = 'none';
+      document.getElementById('spouse_row').style.display = '';
+    }
+  }
+
+
+  var ship_locked_agents = <% encode_json(\%ship_locked_agents) %>;
+  var ship_fields = [
+    'locationname', 'address1', 'city', 'state', 'zip', 'country', 
+    'latitude', 'longitude', 'district'
+  ];
+
+  function agent_changed(what) {
+    var agentnum = what.value;
+
+%   # unlock/lock service location
+
+    var f = what.form;
+    if ( ship_locked_agents[agentnum] ) {
+%     # For this agent, the service location (except address2)
+%     # should be locked to the agent's location.
+%     # Set the ship_ fields to those values (just for display) and
+%     # then disable them.
+      for(var x in ship_locked_agents[agentnum]) {
+        f['ship_'+x].value = ship_locked_agents[agentnum][x];
+        f['ship_'+x].disabled = true;
+      }
+      f['same'].checked = false;
+      f['same'].disabled = true;
+    } else {
+%     # Unlock the ship_ location fields.  If they were previously
+%     # disabled, then they contain some agent's address, which is 
+%     # no longer meaningful.  So set them back to the customer's 
+%     # current location.
+      for(var i=0; i<ship_fields.length; i++) {
+        x = ship_fields[i];
+        if ( f['ship_'+x].disabled )  {
+          f['ship_'+x].value  = f['old_ship_'+x].value;
+        }
+        f['ship_'+x].disabled = false;
+      }
+      f['same'].disabled = false;
+    }
+    samechanged(f['same']);
+
+%   # update sales dropdown
+    salesnum_agentnum_changed(what);
+
+  }
+
+  <&| /elements/onload.js &>
+  agent_changed(document.getElementById('agentnum'))
+  </&>
+ 
+</SCRIPT>
+
+% foreach my $field ($cust_main->virtual_fields) {
+    <% $cust_main->pvf($field)->widget('HTML', 'edit',$cust_main->getfield($field)) %>
+% }
+
+%# tags
+<& /elements/tr-select-cust_tag.html,
+             'custnum' => $custnum,
+             'cgi'     => $cgi,
+&>
+
+%# agent
+% if ( $cgi->param('lock_agentnum') =~ /^(\d+)$/ && $curuser->agentnum($1) ) {
+%
+%   my $agentnum = $1;
+%   $cust_main->agentnum($agentnum);
+
+    <INPUT TYPE="hidden" NAME="lock_agentnum" VALUE="<% $agentnum %>">
+    <INPUT TYPE="hidden" NAME="agentnum"      ID="agentnum" 
+      VALUE="<% $agentnum %>">
+    <TR>
+      <TD ALIGN="right"><% mt('Agent') |h %></TD>
+      <TD CLASS="fsdisabled"><% $cust_main->agent->agent |h %></TD>
+    </TR>
+
+% } else {
+
+  <& /elements/tr-select-agent.html, 
+                'curr_value'    => $cust_main->agentnum,
+                'label'         => "<B>${r}".emt('Agent')."</B>",
+                'empty_label'   => emt('Select agent'),
+                'disable_empty' => ( $cust_main->agentnum ? 1 : 0 ),
+                'viewall_right' => emt('None'), 
+                'onchange'      => 'agent_changed(this)',
+  &>
+
+% }
+
+%# agent_custid
+% if ( $conf->exists('cust_main-edit_agent_custid') ) {
+
+    <TR>
+      <TD ALIGN="right"><% mt('Customer identifier') |h %></TD>
+      <TD><INPUT TYPE="text" NAME="agent_custid" VALUE="<% $cust_main->agent_custid %>"></TD>
+    </TR>
+
+% } else {
+
+    <INPUT TYPE="hidden" NAME="agent_custid" VALUE="<% $cust_main->agent_custid %>">
+
+% }
+
+%# class
+<& /elements/tr-select-cust_class.html,
+             'curr_value'  => $cust_main->classnum,
+             'label'       => emt("Class"),
+&>
+
+%# tax status
+<& /elements/tr-select-tax_status.html,
+             'curr_value'     => $cust_main->taxstatusnum,
+             'disable_empty'  => 0,
+             'empty_label'    => ' ',
+&>
+
+%#sales person
+<& /elements/tr-select-sales.html,
+     'curr_value' => $cust_main->salesnum,
+&>
+
+%# referral (advertising source)
+%my $refnum = $cust_main->refnum || $conf->config('referraldefault') || 0;
+%if ( $custnum && ! $conf->exists('editreferrals') ) {
+
+  <INPUT TYPE="hidden" NAME="refnum" VALUE="<% $refnum %>">
+
+% } else { 
+
+  <& /elements/tr-select-part_referral.html,
+                'curr_value' => $refnum,
+                'label'      => "<B>${r}".emt('Advertising source')."</B>"
+  &>
+% } 
+
+
+%# referring customer
+%my $referring_cust_main = '';
+%if ( $cust_main->referral_custnum
+%     and $referring_cust_main =
+%           qsearchs('cust_main', { custnum => $cust_main->referral_custnum } )
+%     and ! $curuser->access_right('Edit referring customer')
+%) {
+
+  <TR>
+    <TD ALIGN="right"><% mt('Referring customer') |h %></TD>
+    <TD>
+      <A HREF="<% popurl(1) %>/cust_main.cgi?<% $cust_main->referral_custnum %>"><% $cust_main->referral_custnum %>: <% $referring_cust_main->name |h %></A>
+    </TD>
+  </TR>
+  <INPUT TYPE="hidden" NAME="referral_custnum" VALUE="<% $cust_main->referral_custnum %>">
+
+% } elsif ( ! $conf->exists('disable_customer_referrals') ) { 
+
+  <TR>
+    <TD ALIGN="right"><% mt('Referring customer') |h %></TD>
+    <TD>
+      <& /elements/search-cust_main.html,
+                    'field_name' => 'referral_custnum',
+                    'curr_value' => $cust_main->referral_custnum,
+      &>
+    </TD>
+  </TR>
+
+% } else { 
+  <INPUT TYPE="hidden" NAME="referral_custnum" VALUE="">
+% } 
+
+%# signup date
+% if ( $conf->exists('cust_main-edit_signupdate') ) {
+    <& /elements/tr-input-date-field.html, {
+                  'name'        => 'signupdate',
+                  'value'       => $cust_main->signupdate,
+                  'label'       => emt('Signup date'),
+                  'format'      => ( $conf->config('date_format') || "%m/%d/%Y" ),
+              }
+    &>
+% }
+
+% # permission to edit ticket subjects
+% if ( $conf->exists('ticket_system-selfservice_edit_subject') ) {
+  <TR>
+    <TD ALIGN="right">
+      <INPUT TYPE="checkbox" NAME="edit_subject" VALUE="Y" <% 
+        $cust_main->edit_subject ? 'CHECKED' : '' %>></TD>
+    <TD ALIGN="left"><% mt('Can edit ticket subjects') |h %></TD>
+  </TR>
+% } else {
+  <INPUT TYPE="hidden" NAME="edit_subject" VALUE="<% $cust_main->edit_subject %>">
+% }
+
+% # permission to edit
+% if ( $conf->exists('cust_main-edit_calling_list_exempt') ) {
+  <TR>
+    <TD ALIGN="right">
+      <INPUT TYPE="checkbox" NAME="calling_list_exempt" VALUE="Y" <% 
+        $cust_main->calling_list_exempt ? 'CHECKED' : '' %>></TD>
+    <TD ALIGN="left"><% mt('Calling list exempt') |h %></TD>
+  </TR>
+% } else {
+  <INPUT TYPE="hidden" NAME="calling_list_exempt" VALUE="<% $cust_main->calling_list_exempt %>">
+% }
+
+</TABLE>
+
+<%init>
+
+my( $cust_main, %opt ) = @_;
+
+my $custnum = $opt{'custnum'};
+
+if ( $cgi->param('error') ) {
+  $cust_main->set('residential_commercial',
+    ($cgi->param('residential_commercial') eq 'Commercial')
+      ? 'Commercial'
+      : 'Residential'
+  );
+} elsif ( $custnum ) { #editing
+  $cust_main->set('residential_commercial',
+    length($cust_main->company)
+      ? 'Commercial'
+      : 'Residential'
+  );
+} else { #new customer
+  #config to default to commercial and/or disable residential when someone needs
+  $cust_main->set('residential_commercial', 'Residential');
+}
+
+my $conf = new FS::Conf;
+
+my $curuser = $FS::CurrentUser::CurrentUser;
+
+my $r = qq!<font color="#ff0000">*</font>&nbsp;!;
+
+# which agents lock the service address, if any
+my %ship_locked_agents;
+foreach (qsearch('agent',{})) {
+  my $agentnum = $_->agentnum;
+  next unless $conf->exists('agent-ship_address', $_->agentnum);
+  my $cust_main = $_->agent_cust_main or next;
+  my $agent_ship_location = $cust_main->ship_location;
+  $ship_locked_agents{$agentnum} = +{
+    map { $_ => $agent_ship_location->$_ }
+    qw(locationname address1 city state zip country latitude longitude district)
+  };
+}
+
+</%init>

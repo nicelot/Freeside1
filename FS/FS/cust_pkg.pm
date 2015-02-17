@@ -241,6 +241,39 @@ sub cust_unlinked_msg {
   ' (cust_pkg.pkgnum '. $self->pkgnum. ')';
 }
 
+=item set_initial_timers
+
+If required by the package definition, sets any automatic expire, adjourn,
+or contract_end timers to some number of months after the start date 
+(or setup date, if the package has already been setup). If the package has
+a delayed setup fee after a period of "free days", will also set the 
+start date to the end of that period.
+
+=cut
+
+sub set_initial_timers {
+  my $self = shift;
+  my $part_pkg = $self->part_pkg;
+  foreach my $action ( qw(expire adjourn contract_end) ) {
+    my $months = $part_pkg->option("${action}_months",1);
+    if($months and !$self->get($action)) {
+      my $start = $self->start_date || $self->setup || time;
+      $self->set($action, $part_pkg->add_freq($start, $months) );
+    }
+  }
+
+  # if this package has "free days" and delayed setup fee, then
+  # set start date that many days in the future.
+  # (this should have been set in the UI, but enforce it here)
+  if ( $part_pkg->option('free_days',1)
+       && $part_pkg->option('delay_setup',1)
+     )
+  {
+    $self->start_date( $part_pkg->default_start_date );
+  }
+  '';
+}
+
 =item insert [ OPTION => VALUE ... ]
 
 Adds this billing item to the database ("Orders" the item).  If there is an
@@ -305,6 +338,9 @@ sub insert {
 
   if ( ! $import && ! $options{'change'} ) {
 
+    # set order date to now
+    $self->order_date(time) unless ($import && $self->order_date);
+
     # if the package def says to start only on the first of the month:
     if ( $part_pkg->option('start_1st', 1) && !$self->start_date ) {
       my ($sec,$min,$hour,$mday,$mon,$year) = (localtime(time) )[0,1,2,3,4,5];
@@ -313,35 +349,17 @@ sub insert {
       $self->start_date( timelocal_nocheck(0,0,0,1,$mon,$year) );
     }
 
-    # set up any automatic expire/adjourn/contract_end timers
-    # based on the start date
-    foreach my $action ( qw(expire adjourn contract_end) ) {
-      my $months = $part_pkg->option("${action}_months",1);
-      if($months and !$self->$action) {
-        my $start = $self->start_date || $self->setup || time;
-        $self->$action( $part_pkg->add_freq($start, $months) );
-      }
+    if ($self->susp eq 'now' or $part_pkg->start_on_hold) {
+      # if the package was ordered on hold:
+      # - suspend it
+      # - don't set the start date (it will be started manually)
+      $self->set('susp', $self->order_date);
+      $self->set('start_date', '');
+    } else {
+      # set expire/adjourn/contract_end timers, and free days, if appropriate
+      $self->set_initial_timers;
     }
-
-    # if this package has "free days" and delayed setup fee, then 
-    # set start date that many days in the future.
-    # (this should have been set in the UI, but enforce it here)
-    if (    ! $options{'change'}
-         && $part_pkg->option('free_days', 1)
-         && $part_pkg->option('delay_setup',1)
-         #&& ! $self->start_date
-       )
-    {
-      $self->start_date( $part_pkg->default_start_date );
-    }
-  }
-
-  # set order date unless it was specified as part of an import
-  # or this was previously a different package
-  $self->order_date(time) unless ($import && $self->order_date)
-                              or $self->change_pkgnum;
-
-  $self->susp( $self->order_date ) if $self->susp eq 'now';
+  } # else this is a package change, and shouldn't have "new package" behavior
 
   my $oldAutoCommit = $FS::UID::AutoCommit;
   local $FS::UID::AutoCommit = 0;
@@ -777,7 +795,9 @@ sub cancel {
   my $error;
 
   # pass all suspend/cancel actions to the main package
-  if ( $self->main_pkgnum and !$options{'from_main'} ) {
+  # (unless the pkglinknum has been removed, then the link is defunct and
+  # this package can be canceled on its own)
+  if ( $self->main_pkgnum and $self->pkglinknum and !$options{'from_main'} ) {
     return $self->main_pkg->cancel(%options);
   }
 
@@ -877,6 +897,12 @@ sub cancel {
     $hash{'cancel'} = $cancel_time;
   }
   $hash{'change_custnum'} = $options{'change_custnum'};
+
+  # if this is a supplemental package that's lost its part_pkg_link, and it's
+  # being canceled for real, unlink it completely
+  if ( !$date and ! $self->pkglinknum ) {
+    $hash{main_pkgnum} = '';
+  }
 
   my $new = new FS::cust_pkg ( \%hash );
   $error = $new->replace( $self, options => { $self->options } );
@@ -1181,7 +1207,7 @@ Available options are:
 
 =over 4
 
-=item reason - can be set to a cancellation reason (see L<FS:reason>), 
+=item reason - can be set to a cancellation reason (see L<FS:reason>),
 either a reasonnum of an existing reason, or passing a hashref will create 
 a new reason.  The hashref should have the following keys: 
 - typenum - Reason type (see L<FS::reason_type>
@@ -1271,6 +1297,16 @@ sub suspend {
     }
   }
 
+  # if a reasonnum was passed, get the actual reason object so we can check
+  # unused_credit
+  # (passing a reason hashref is still allowed, but it can't be used with
+  # the fancy behavioral options.)
+
+  my $reason;
+  if ($options{'reason'} =~ /^\d+$/) {
+    $reason = FS::reason->by_key($options{'reason'});
+  }
+
   my %hash = $self->hash;
   if ( $date ) {
     $hash{'adjourn'} = $date;
@@ -1295,9 +1331,15 @@ sub suspend {
     return $error;
   }
 
-  unless ( $date ) {
+  unless ( $date ) { # then we are suspending now
+
     # credit remaining time if appropriate
-    if ( $self->part_pkg->option('unused_credit_suspend', 1) ) {
+    # (if required by the package def, or the suspend reason)
+    my $unused_credit = $self->part_pkg->option('unused_credit_suspend',1)
+                        || ( defined($reason) && $reason->unused_credit );
+
+    if ( $unused_credit ) {
+      warn "crediting unused time on pkg#".$self->pkgnum."\n" if $DEBUG;
       my $error = $self->credit_remaining('suspend', $suspend_time);
       if ($error) {
         $dbh->rollback if $oldAutoCommit;
@@ -1470,6 +1512,8 @@ sub unsuspend {
     return "";  # no error                     # complain instead?
   }
 
+  # handle the case of setting a future unsuspend (resume) date
+  # and do not continue to actually unsuspend the package
   my $date = $opt{'date'};
   if ( $date and $date > time ) { # return an error if $date <= time?
 
@@ -1492,6 +1536,11 @@ sub unsuspend {
     }
   
   } #if $date 
+
+  if (!$self->setup) {
+    # then this package is being released from on-hold status
+    $self->set_initial_timers;
+  }
 
   my @labels = ();
 
@@ -2313,18 +2362,7 @@ sub modify_charge {
   }
 
   if ( !$self->get('setup') ) {
-    # not yet billed, so allow amount and quantity
-    if ( exists($opt{'quantity'})
-          and $opt{'quantity'} != $self->quantity
-          and $opt{'quantity'} > 0 ) {
-        
-      $self->set('quantity', $opt{'quantity'});
-    }
-    if ( exists($opt{'start_date'})
-          and $opt{'start_date'} != $self->start_date ) {
-
-      $self->set('start_date', $opt{'start_date'});
-    }
+    # not yet billed, so allow amount, setup_cost, quantity and start_date
 
     if ( exists($opt{'amount'}) 
           and $part_pkg->option('setup_fee') != $opt{'amount'}
@@ -2332,8 +2370,29 @@ sub modify_charge {
 
       $pkg_opt{'setup_fee'} = $opt{'amount'};
       $pkg_opt_modified = 1;
-
     }
+
+    if ( exists($opt{'setup_cost'}) 
+          and $part_pkg->setup_cost != $opt{'setup_cost'}
+          and $opt{'setup_cost'} > 0 ) {
+
+      $part_pkg->set('setup_cost', $opt{'setup_cost'});
+    }
+
+    if ( exists($opt{'quantity'})
+          and $opt{'quantity'} != $self->quantity
+          and $opt{'quantity'} > 0 ) {
+        
+      $self->set('quantity', $opt{'quantity'});
+    }
+
+    if ( exists($opt{'start_date'})
+          and $opt{'start_date'} != $self->start_date ) {
+
+      $self->set('start_date', $opt{'start_date'});
+    }
+
+
   } # else simply ignore them; the UI shouldn't allow editing the fields
 
   my $error;
@@ -2433,12 +2492,10 @@ sub modify_charge {
 
 
 
-use Storable 'thaw';
-use MIME::Base64;
 use Data::Dumper;
 sub process_bulk_cust_pkg {
   my $job = shift;
-  my $param = thaw(decode_base64(shift));
+  my $param = shift;
   warn Dumper($param) if $DEBUG;
 
   my $old_part_pkg = qsearchs('part_pkg', 
@@ -2718,7 +2775,7 @@ sub set_cust_pkg_detail {
 
 =item cust_event
 
-Returns the new-style customer billing events (see L<FS::cust_event>) for this invoice.
+Returns the customer billing events (see L<FS::cust_event>) for this invoice.
 
 =cut
 
@@ -2735,19 +2792,41 @@ sub cust_event {
 
 =item num_cust_event
 
-Returns the number of new-style customer billing events (see L<FS::cust_event>) for this invoice.
+Returns the number of customer billing events (see L<FS::cust_event>) for this package.
 
 =cut
 
 #false laziness w/cust_bill.pm
 sub num_cust_event {
   my $self = shift;
-  my $sql =
-    "SELECT COUNT(*) FROM cust_event JOIN part_event USING ( eventpart ) ".
-    "  WHERE tablenum = ? AND eventtable = 'cust_pkg'";
+  my $sql = "SELECT COUNT(*) ". $self->_from_cust_event_where;
+  $self->_prep_ex($sql, $self->pkgnum)->fetchrow_arrayref->[0];
+}
+
+=item exists_cust_event
+
+Returns true if there are customer billing events (see L<FS::cust_event>) for this package.  More efficient than using num_cust_event.
+
+=cut
+
+sub exists_cust_event {
+  my $self = shift;
+  my $sql = "SELECT 1 ". $self->_from_cust_event_where. " LIMIT 1";
+  my $row = $self->_prep_ex($sql, $self->pkgnum)->fetchrow_arrayref;
+  $row ? $row->[0] : '';
+}
+
+sub _from_cust_event_where {
+  #my $self = shift;
+  " FROM cust_event JOIN part_event USING ( eventpart ) ".
+  "  WHERE tablenum = ? AND eventtable = 'cust_pkg' ";
+}
+
+sub _prep_ex {
+  my( $self, $sql, @args ) = @_;
   my $sth = dbh->prepare($sql) or die  dbh->errstr. " preparing $sql"; 
-  $sth->execute($self->pkgnum) or die $sth->errstr. " executing $sql";
-  $sth->fetchrow_arrayref->[0];
+  $sth->execute(@args)         or die $sth->errstr. " executing $sql";
+  $sth;
 }
 
 =item part_pkg_currency_option OPTIONNAME
@@ -3591,7 +3670,7 @@ sub transfer {
   return ('Package does not exist: '.$dest_pkgnum) unless $dest;
 
   foreach my $pkg_svc ( $dest->part_pkg->pkg_svc ) {
-    $target{$pkg_svc->svcpart} = $pkg_svc->quantity;
+    $target{$pkg_svc->svcpart} = $pkg_svc->quantity * ( $dest->quantity || 1 );
   }
 
   foreach my $cust_svc ($dest->cust_svc) {
@@ -3819,7 +3898,7 @@ sub insert_reason {
     $reasonnum = $reason->reasonnum;
 
   } else {
-    return "Unparsable reason: ". $options{'reason'};
+    return "Unparseable reason: ". $options{'reason'};
   }
 
   my $cust_pkg_reason =
@@ -4664,6 +4743,23 @@ sub _upgrade_data {  # class method
   foreach my $sql (@statements) {
     my $sth = dbh->prepare($sql);
     $sth->execute or die $sth->errstr;
+  }
+
+  # RT31194: supplemental package links that are deleted don't clean up 
+  # linked records
+  my @pkglinknums = qsearch({
+      'select'    => 'DISTINCT cust_pkg.pkglinknum',
+      'table'     => 'cust_pkg',
+      'addl_from' => ' LEFT JOIN part_pkg_link USING (pkglinknum) ',
+      'extra_sql' => ' WHERE cust_pkg.pkglinknum IS NOT NULL 
+                        AND part_pkg_link.pkglinknum IS NULL',
+  });
+  foreach (@pkglinknums) {
+    my $pkglinknum = $_->pkglinknum;
+    warn "cleaning part_pkg_link #$pkglinknum\n";
+    my $part_pkg_link = FS::part_pkg_link->new({pkglinknum => $pkglinknum});
+    my $error = $part_pkg_link->remove_linked;
+    die $error if $error;
   }
 }
 

@@ -32,7 +32,8 @@ our @encrypt_payby = qw( CARD DCRD CHEK DCHK );
 #export dbdef for now... everything else expects to find it here
 our @EXPORT_OK = qw(
   dbh fields hfields qsearch qsearchs dbdef jsearch
-  str2time_sql str2time_sql_closing regexp_sql not_regexp_sql concat_sql
+  str2time_sql str2time_sql_closing regexp_sql not_regexp_sql
+  concat_sql group_concat_sql
   midnight_sql
 );
 
@@ -124,6 +125,8 @@ FS::Record - Database record objects
     $error = $record->ut_floatn('column');
     $error = $record->ut_number('column');
     $error = $record->ut_numbern('column');
+    $error = $record->ut_decimal('column');
+    $error = $record->ut_decimaln('column');
     $error = $record->ut_snumber('column');
     $error = $record->ut_snumbern('column');
     $error = $record->ut_money('column');
@@ -406,7 +409,6 @@ sub qsearch {
     push @statement, $statement;
 
     warn "[debug]$me $statement\n" if $DEBUG > 1 || $debug;
- 
 
     foreach my $field (
       grep defined( $record->{$_} ) && $record->{$_} ne '', @real_fields
@@ -1041,7 +1043,10 @@ sub fk_methods {
 
     my $method = '';
     if ( scalar( @{$fk->columns} ) == 1 ) {
-      if ( ! @{$fk->references} || $fk->columns->[0] eq $fk->references->[0] ){
+      if (    ! defined($fk->references)
+           || ! @{$fk->references}
+           || $fk->columns->[0] eq $fk->references->[0]
+      ) {
         $method = $fk->table;
       } else {
         #some sort of hint in the table.pm or schema for methods not named
@@ -1072,7 +1077,10 @@ sub fk_methods {
 
       my $method = '';
       if ( scalar( @{$fk->columns} ) == 1 ) {
-        if ( ! @{$fk->references} || $fk->columns->[0] eq $fk->references->[0] ){
+        if (    ! defined($fk->references)
+             || ! @{$fk->references}
+             || $fk->columns->[0] eq $fk->references->[0]
+        ) {
           $method = $f_table;
         } else {
           #some sort of hint in the table.pm or schema for methods not named
@@ -1759,17 +1767,14 @@ files.  Currently only supports a single file named "file".
 
 =cut
 
-use Storable qw(thaw);
 use Data::Dumper;
-use MIME::Base64;
 sub process_batch_import {
-  my($job, $opt) = ( shift, shift );
+  my($job, $opt, $param) = @_;
 
   my $table = $opt->{table};
   my @pass_params = $opt->{params} ? @{ $opt->{params} } : ();
   my %formats = %{ $opt->{formats} };
 
-  my $param = thaw(decode_base64(shift));
   warn Dumper($param) if $DEBUG;
   
   my $files = $param->{'uploaded_files'}
@@ -2434,6 +2439,35 @@ sub ut_numbern {
   '';
 }
 
+=item ut_decimal COLUMN[, DIGITS]
+
+Check/untaint decimal numbers (up to DIGITS decimal places.  If there is an 
+error, returns the error, otherwise returns false.
+
+=item ut_decimaln COLUMN[, DIGITS]
+
+Check/untaint decimal numbers.  May be null.  If there is an error, returns
+the error, otherwise returns false.
+
+=cut
+
+sub ut_decimal {
+  my($self, $field, $digits) = @_;
+  $digits ||= '';
+  $self->getfield($field) =~ /^\s*(\d+(\.\d{0,$digits})?)\s*$/
+    or return "Illegal or empty (decimal) $field: ".$self->getfield($field);
+  $self->setfield($field, $1);
+  '';
+}
+
+sub ut_decimaln {
+  my($self, $field, $digits) = @_;
+  $self->getfield($field) =~ /^\s*(\d*(\.\d{0,$digits})?)\s*$/
+    or return "Illegal (decimal) $field: ".$self->getfield($field);
+  $self->setfield($field, $1);
+  '';
+}
+
 =item ut_money COLUMN
 
 Check/untaint monetary numbers.  May be negative.  Set to 0 if null.  If there
@@ -2613,8 +2647,8 @@ sub ut_alpha_lower {
 Check/untaint phone numbers.  May be null.  If there is an error, returns
 the error, otherwise returns false.
 
-Takes an optional two-letter ISO country code; without it or with unsupported
-countries, ut_phonen simply calls ut_alphan.
+Takes an optional two-letter ISO 3166-1 alpha-2 country code; without
+it or with unsupported countries, ut_phonen simply calls ut_alphan.
 
 =cut
 
@@ -3286,7 +3320,7 @@ sub scalar_sql {
   defined($scalar) ? $scalar : '';
 }
 
-=item count [ WHERE ]
+=item count [ WHERE [, PLACEHOLDER ...] ]
 
 Convenience method for the common case of "SELECT COUNT(*) FROM table", 
 with optional WHERE.  Must be called as method on a class with an 
@@ -3299,7 +3333,7 @@ sub count {
   my $table = $self->table or die 'count called on object of class '.ref($self);
   my $sql = "SELECT COUNT(*) FROM $table";
   $sql .= " WHERE $where" if $where;
-  $self->scalar_sql($sql);
+  $self->scalar_sql($sql, @_);
 }
 
 =back
@@ -3533,6 +3567,24 @@ sub concat_sql {
     join('||', @$items);
   }
 
+}
+
+=item group_concat_sql COLUMN, DELIMITER
+
+Returns an SQL expression to concatenate an aggregate column, using 
+GROUP_CONCAT() for mysql and array_to_string() and array_agg() for Pg.
+
+=cut
+
+sub group_concat_sql {
+  my ($col, $delim) = @_;
+  $delim = dbh->quote($delim);
+  if ( driver_name() =~ /^mysql/i ) {
+    # DISTINCT(foo) is valid as $col
+    return "GROUP_CONCAT($col SEPARATOR $delim)";
+  } else {
+    return "array_to_string(array_agg($col), $delim)";
+  }
 }
 
 =item midnight_sql DATE

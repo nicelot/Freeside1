@@ -124,7 +124,15 @@ unless ( $nologin_actions{$action} ) {
           'email'    => $email,
           'password' => $password
         );
-        $session_id = $login_rv->{'session_id'};
+
+	if ( $login_rv->{'error'} ) {
+	  my $ip = $cgi->remote_addr();
+	  warn("login failure [email $email] [ip $ip] [error $login_rv->{error}]");
+	} else {
+	  #successful login
+	}
+
+	$session_id = $login_rv->{'session_id'};
 
       } else {
 
@@ -306,6 +314,7 @@ sub process_change_pay {
             'error' => '<FONT COLOR="#FF0000">Postal or email required.</FONT>',
           };
         }
+
         _process_change_info( 'change_pay', @list );
 }
 
@@ -627,7 +636,10 @@ sub payment_results {
   my $auto = 0;
   $auto = 1 if $cgi->param('auto');
 
-  $cgi->param('paybatch') =~ /^([\w\-\.]+)$/ or die "illegal paybatch";
+  $cgi->param('payunique') =~ /^([\w\-\.]*)$/ or die "illegal payunique";
+  my $payunique = $1;
+
+  $cgi->param('paybatch') =~ /^([\w\-\.]*)$/ or die "illegal paybatch";
   my $paybatch = $1;
 
   $cgi->param('discount_term') =~ /^(\d*)$/ or die "illegal discount_term";
@@ -651,6 +663,7 @@ sub payment_results {
     'country'    => $country,
     'save'       => $save,
     'auto'       => $auto,
+    'payunique'  => $payunique,
     'paybatch'   => $paybatch,
     'discount_term' => $discount_term,
   );
@@ -923,11 +936,17 @@ sub delete_svc {
 }
 
 sub view_usage {
-  list_svcs(
+  my $res = list_svcs(
     'session_id'  => $session_id,
     'svcdb'       => [ 'svc_acct', 'svc_phone', 'svc_port', ],
     'ncancelled'  => 1,
   );
+  if ($res->{hide_usage}) {
+    $action = 'myaccount';
+    return myaccount();
+  } else {
+    return $res;
+  }
 }
 
 sub real_port_graph {

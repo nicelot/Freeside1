@@ -220,26 +220,82 @@ Internal method - returns a filled-in template for this invoice as a scalar.
 
 See print_ps and print_pdf for methods that return PostScript and PDF output.
 
-Non optional options include 
-  format - latex, html, template
+Required options
 
-Optional options include
+=over 4
 
-template - a value used as a suffix for a configuration template.  Please 
-don't use this.
+=item format
 
-time - a value used to control the printing of overdue messages.  The
+The B<format> option is required and should be set to html, latex (print and PDF) or template (plaintext).
+
+=back
+
+Additional options
+
+=over 4
+
+=item notice_name
+
+Overrides "Invoice" as the name of the sent document.
+
+=item today
+
+Used to control the printing of overdue messages.  The
 default is now.  It isn't the date of the invoice; that's the `_date' field.
 It is specified as a UNIX timestamp; see L<perlfunc/"time">.  Also see
 L<Time::Local> and L<Date::Parse> for conversion functions.
 
-cid - 
+=item logo_file
 
-unsquelch_cdr - overrides any per customer cdr squelching when true
+Logo file (path to temporary EPS file on the local filesystem)
 
-notice_name - overrides "Invoice" as the name of the sent document (templates from 10/2009 or newer required)
+=item cid
 
-locale - override customer's locale
+CID for inline (emailed) images (logo)
+
+=item locale
+
+Override customer's locale
+
+=item unsquelch_cdr
+
+Overrides any per customer cdr squelching when true
+
+=item no_number
+
+Supress the (invoice, quotation, statement, etc.) number
+
+=item no_date
+
+Supress the date
+
+=item no_coupon
+
+Supress the payment coupon
+
+=item barcode_file
+
+Barcode file (path to temporary EPS file on the local filesystem)
+
+=item barcode_img
+
+Flag indicating the barcode image should be a link (normal HTML dipaly)
+
+=item barcode_cid
+
+Barcode CID for inline (emailed) images
+
+=item preref_callback
+
+Coderef run for each line item, code should return HTML to be displayed
+before that line item (quotations only)
+
+=item template
+
+Dprecated.  Used as a suffix for a configuration template.  Please 
+don't use this, it deprecated in favor of more flexible alternatives.
+
+=back
 
 =cut
 
@@ -288,13 +344,13 @@ sub print_generic {
   my @invoice_template = map "$_\n", $conf->config($templatefile)
     or die "cannot load config data $templatefile";
 
-  my $old_latex = '';
   if ( $format eq 'latex' && grep { /^%%Detail/ } @invoice_template ) {
     #change this to a die when the old code is removed
+    # it's been almost ten years, changing it to a die on the next release.
     warn "old-style invoice template $templatefile; ".
          "patch with conf/invoice_latex.diff or use new conf/invoice_latex*\n";
-    $old_latex = 'true';
-    @invoice_template = _translate_old_latex_format(@invoice_template);
+         #$old_latex = 'true';
+         #@invoice_template = _translate_old_latex_format(@invoice_template);
   } 
 
   warn "$me print_generic creating T:T object\n"
@@ -630,18 +686,6 @@ sub print_generic {
   #my $balance_due = $self->owed + $pr_total - $cr_total;
   my $balance_due = $self->owed + $pr_total;
 
-  #these are used on the summary page only
-
-    # the customer's current balance as shown on the invoice before this one
-    $invoice_data{'true_previous_balance'} = sprintf("%.2f", ($self->previous_balance || 0) );
-
-    # the change in balance from that invoice to this one
-    $invoice_data{'balance_adjustments'} = sprintf("%.2f", ($self->previous_balance || 0) - ($self->billing_balance || 0) );
-
-    # the sum of amount owed on all previous invoices
-    # ($pr_total is used elsewhere but not as $previous_balance)
-    $invoice_data{'previous_balance'} = sprintf("%.2f", $pr_total);
-
   # the sum of amount owed on all invoices
   # (this is used in the summary & on the payment coupon)
   $invoice_data{'balance'} = sprintf("%.2f", $balance_due);
@@ -652,8 +696,66 @@ sub print_generic {
 
   if ( $self->custnum && $self->invnum ) {
 
-    if ( $self->previous_bill ) {
-      my $last_bill = $self->previous_bill;
+    my $last_bill = $self->previous_bill;
+    if ( $last_bill ) {
+
+      # "balance_date_range" unfortunately is unsuitable for this, since it
+      # cares about application dates.  We want to know the sum of all 
+      # _top-level transactions_ dated before the last invoice.
+      my @sql =
+        map "$_ WHERE _date <= ? AND custnum = ?", (
+          "SELECT      COALESCE( SUM(charged), 0 ) FROM cust_bill",
+          "SELECT -1 * COALESCE( SUM(amount),  0 ) FROM cust_credit",
+          "SELECT -1 * COALESCE( SUM(paid),    0 ) FROM cust_pay",
+          "SELECT      COALESCE( SUM(refund),  0 ) FROM cust_refund",
+        );
+
+      # the customer's current balance immediately after generating the last 
+      # bill
+
+      my $last_bill_balance = $last_bill->charged;
+      foreach (@sql) {
+        my $delta = FS::Record->scalar_sql(
+          $_,
+          $last_bill->_date - 1,
+          $self->custnum,
+        );
+        $last_bill_balance += $delta;
+      }
+
+      $last_bill_balance = sprintf("%.2f", $last_bill_balance);
+
+      warn sprintf("LAST BILL: INVNUM %d, DATE %s, BALANCE %.2f\n\n",
+        $last_bill->invnum,
+        $self->time2str_local('%D', $last_bill->_date),
+        $last_bill_balance
+      ) if $DEBUG > 0;
+      # ("true_previous_balance" is a terrible name, but at least it's no
+      # longer stored in the database)
+      $invoice_data{'true_previous_balance'} = $last_bill_balance;
+
+      # the change in balance from immediately after that invoice
+      # to immediately before this one
+      my $before_this_bill_balance = 0;
+      foreach (@sql) {
+        my $delta = FS::Record->scalar_sql(
+          $_,
+          $self->_date - 1,
+          $self->custnum,
+        );
+        $before_this_bill_balance += $delta;
+      }
+      $invoice_data{'balance_adjustments'} =
+        sprintf("%.2f", $last_bill_balance - $before_this_bill_balance);
+
+      warn sprintf("BALANCE ADJUSTMENTS: %.2f\n\n",
+                   $invoice_data{'balance_adjustments'}
+      ) if $DEBUG > 0;
+
+      # the sum of amount owed on all previous invoices
+      # ($pr_total is used elsewhere but not as $previous_balance)
+      $invoice_data{'previous_balance'} = sprintf("%.2f", $pr_total);
+
       $invoice_data{'last_bill'} = {
         '_date'     => $last_bill->_date, #unformatted
       };
@@ -690,9 +792,15 @@ sub print_generic {
       }
       $invoice_data{'previous_payments'} = \@payments;
       $invoice_data{'previous_credits'}  = \@credits;
+    } else {
+      # there is no $last_bill
+      $invoice_data{'true_previous_balance'} =
+      $invoice_data{'balance_adjustments'}   =
+      $invoice_data{'previous_balance'}      = '0.00';
+      $invoice_data{'previous_payments'} = [];
+      $invoice_data{'previous_credits'} = [];
     }
-
-  }
+  } # if this is an invoice
 
   my $summarypage = '';
   if ( $conf->exists('invoice_usesummary', $agentnum) ) {
@@ -769,6 +877,7 @@ sub print_generic {
                     );
   my $money_char = $money_chars{$format};
 
+  # extremely dubious
   my %other_money_chars = ( 'latex'    => '\dollar ',#XXX should be a config too
                             'html'     => $conf->config('money_char') || '$',
                             'template' => '',
@@ -871,7 +980,7 @@ sub print_generic {
     # we haven't yet changed the template to take advantage of that, so for 
     # now, treat them as mutually exclusive.
     my %section_method = ( by_category => 1 );
-    if ( $conf->exists($tc.'sections_by_location') ) {
+    if ( $conf->config($tc.'sections_method') eq 'location' ) {
       %section_method = ( by_location => 1 );
     }
     my ($early, $late) =
@@ -929,6 +1038,36 @@ sub print_generic {
                                     sprintf('%.2f', sum( @charges ) || 0);
   }
 
+  # start setting up summary subtotals
+  my @summary_subtotals;
+  my $method = $conf->config('summary_subtotals_method');
+  if ( $method and $method ne $conf->config($tc.'sections_method') ) {
+    # then re-section them by the correct method
+    my %section_method = ( by_category => 1 );
+    if ( $conf->config('summary_subtotals_method') eq 'location' ) {
+      %section_method = ( by_location => 1 );
+    }
+    my ($early, $late) =
+      $self->_items_sections( 'summary' => $summarypage,
+                              'escape'  => $escape_function_nonbsp,
+                              'extra_sections' => $extra_sections,
+                              'format'  => $format,
+                              %section_method
+                            );
+    foreach ( @$early ) {
+      next if $_->{subtotal} == 0;
+      $_->{subtotal} = $other_money_char.sprintf('%.2f', $_->{subtotal});
+      push @summary_subtotals, $_;
+    }
+  } else {
+    # subtotal sectioning is the same as for the actual invoice sections
+    @summary_subtotals = @sections;
+  }
+
+  # Hereafter, push sections to both @sections and @summary_subtotals
+  # if they belong in both places (e.g. tax section).  Late sections are
+  # never in @summary_subtotals.
+
   # previous invoice balances in the Previous Charges section if there
   # is one, otherwise in the main detail section
   # (except if summary_only is enabled, don't show them at all)
@@ -950,8 +1089,7 @@ sub print_generic {
         ext_description => [ map { &$escape_function($_) } 
                              @{ $line_item->{'ext_description'} || [] }
                            ],
-        amount          => ( $old_latex ? '' : $money_char).
-                            $line_item->{'amount'},
+        amount          => $money_char . $line_item->{'amount'},
         product_code    => $line_item->{'pkgpart'} || 'N/A',
       };
 
@@ -1021,6 +1159,7 @@ sub print_generic {
     $options{'summary_page'} = $summarypage;
     $options{'skip_usage'} =
       scalar(@$extra_sections) && !grep{$section == $_} @$extra_sections;
+    $options{'preref_callback'} = $params{'preref_callback'};
 
     warn "$me   searching for line items\n"
       if $DEBUG > 1;
@@ -1028,40 +1167,17 @@ sub print_generic {
     foreach my $line_item ( $self->_items_pkg(%options),
                             $self->_items_fee(%options) ) {
 
-      warn "$me     adding line item $line_item\n"
+      warn "$me     adding line item ".
+           join(', ', map "$_=>".$line_item->{$_}, keys %$line_item). "\n"
         if $DEBUG > 1;
 
-      # this is silly
-      #my $detail = {
-      #  ext_description => [],
-      #};
-      #$detail->{'ref'} = $line_item->{'pkgnum'};
-      #$detail->{'pkgpart'} = $line_item->{'pkgpart'};
-      #$detail->{'quantity'} = $line_item->{'quantity'};
-      #$detail->{'section'} = $section;
-      #$detail->{'description'} = &$escape_function($line_item->{'description'});
-      #if ( exists $line_item->{'ext_description'} ) {
-      #  @{$detail->{'ext_description'}} = @{$line_item->{'ext_description'}};
-      #}
-      #$detail->{'amount'} = ( $old_latex ? '' : $money_char ).
-      #                        $line_item->{'amount'};
-      #if ( exists $line_item->{'unit_amount'} ) {
-      #  $detail->{'unit_amount'} = ( $old_latex ? '' : $money_char ).
-      #                             $line_item->{'unit_amount'};
-      #}
-      #$detail->{'product_code'} = $line_item->{'pkgpart'} || 'N/A';
-
-      #$detail->{'sdate'} = $line_item->{'sdate'};
-      #$detail->{'edate'} = $line_item->{'edate'};
-      #$detail->{'seconds'} = $line_item->{'seconds'};
-      #$detail->{'svc_label'} = $line_item->{'svc_label'};
-      #$detail->{'usage_item'} = $line_item->{'usage_item'};
       $line_item->{'ref'} = $line_item->{'pkgnum'};
       $line_item->{'product_code'} = $line_item->{'pkgpart'} || 'N/A'; # mt()?
       $line_item->{'section'} = $section;
       $line_item->{'description'} = &$escape_function($line_item->{'description'});
-      if (!$old_latex) { # dubious; templates should provide this
-        $line_item->{'amount'} = $money_char.$line_item->{'amount'};
+      $line_item->{'amount'} = $money_char.$line_item->{'amount'};
+
+      if ( length($line_item->{'unit_amount'}) ) {
         $line_item->{'unit_amount'} = $money_char.$line_item->{'unit_amount'};
       }
       $line_item->{'ext_description'} ||= [];
@@ -1092,6 +1208,7 @@ sub print_generic {
   # if there's anything in the Previous Charges section, prepend it to the list
   if ( $pr_total and $previous_section ne $default_section ) {
     unshift @sections, $previous_section;
+    # but not @summary_subtotals
   }
 
   warn "$me adding taxes\n"
@@ -1107,13 +1224,12 @@ sub print_generic {
 
     if ( $multisection ) {
 
-      my $money = $old_latex ? '' : $money_char;
       push @detail_items, {
         ext_description => [],
         ref          => '',
         quantity     => '',
         description  => $description,
-        amount       => $money. $amount,
+        amount       => $money_char. $amount,
         product_code => '',
         section      => $tax_section,
       };
@@ -1144,8 +1260,11 @@ sub print_generic {
                                    sprintf('%.2f', $taxtotal);
       $tax_section->{'pretotal'} = 'New charges sub-total '.
                                    $total->{'total_amount'};
-      push @sections, $tax_section if $taxtotal;
-    }else{
+      if ( $taxtotal ) {
+        push @sections, $tax_section;
+        push @summary_subtotals, $tax_section;
+      }
+    } else {
       unshift @total_items, $total;
     }
   }
@@ -1238,13 +1357,12 @@ sub print_generic {
         $total->{'total_amount'} = $minus.$other_money_char.$credit->{'amount'};
         $adjusttotal += $credit->{'amount'};
         if ( $multisection ) {
-          my $money = $old_latex ? '' : $money_char;
           push @detail_items, {
             ext_description => [],
             ref          => '',
             quantity     => '',
             description  => &$escape_function($credit->{'description'}),
-            amount       => $money. $credit->{'amount'},
+            amount       => $money_char . $credit->{'amount'},
             product_code => '',
             section      => $adjust_section,
           };
@@ -1273,13 +1391,12 @@ sub print_generic {
         $total->{'total_amount'} = $minus.$other_money_char.$payment->{'amount'};
         $adjusttotal += $payment->{'amount'};
         if ( $multisection ) {
-          my $money = $old_latex ? '' : $money_char;
           push @detail_items, {
             ext_description => [],
             ref          => '',
             quantity     => '',
             description  => &$escape_function($payment->{'description'}),
-            amount       => $money. $payment->{'amount'},
+            amount       => $money_char . $payment->{'amount'},
             product_code => '',
             section      => $adjust_section,
           };
@@ -1297,6 +1414,8 @@ sub print_generic {
                                         sprintf('%.2f', $adjusttotal);
         push @sections, $adjust_section
           unless $adjust_section->{sort_weight};
+        # do not summarize; adjustments there are shown according to 
+        # different rules
       }
 
       # create Balance Due message
@@ -1375,7 +1494,7 @@ sub print_generic {
       'no_subtotal' => 1,
     };
 
-    push @sections, $discount_section;
+    push @sections, $discount_section; # do not summarize
     push @detail_items, map { +{
         'ref'         => '', #should this be something else?
         'section'     => $discount_section,
@@ -1385,23 +1504,7 @@ sub print_generic {
     } } @discounts_avail;
   }
 
-  my @summary_subtotals;
-  # the templates say "$_->{tax_section} || !$_->{summarized}"
-  # except 'summarized' is only true when tax_section is true, so this 
-  # is always true, so what's the deal?
-  foreach my $s (@sections) {
-    # not to include in the "summary of new charges" block:
-    # finance charges, adjustments, previous charges, 
-    # and itemized phone usage sections
-    if ( $s eq $adjust_section   or
-         ($s eq $previous_section and $s ne $default_section) or
-         ($invoice_data{'finance_section'} and 
-          $invoice_data{'finance_section'} eq $s->{description}) or
-         $s->{'description'} =~ /^\d+ $/ ) {
-      next;
-    }
-    push @summary_subtotals, $s;
-  }
+  # not adding any more sections after this
   $invoice_data{summary_subtotals} = \@summary_subtotals;
 
   # usage subtotals
@@ -1409,7 +1512,7 @@ sub print_generic {
        and $self->can('_items_usage_class_summary') ) {
     my @usage_subtotals = $self->_items_usage_class_summary(escape => $escape_function);
     if ( @usage_subtotals ) {
-      unshift @sections, $usage_subtotals[0]->{section};
+      unshift @sections, $usage_subtotals[0]->{section}; # do not summarize
       unshift @detail_items, @usage_subtotals;
     }
   }
@@ -1753,8 +1856,15 @@ sub terms {
   my $cust_main = $self->cust_main;
   return $cust_main->invoice_terms if $cust_main && $cust_main->invoice_terms;
 
+  my $agentnum = '';
+  if ( $cust_main ) {
+    $agentnum = $cust_main->agentnum;
+  } elsif ( my $prospect_main = $self->prospect_main ) {
+    $agentnum = $prospect_main->agentnum;
+  }
+
   #use configured default
-  $conf->config('invoice_default_terms') || '';
+  $conf->config('invoice_default_terms', $agentnum) || '';
 }
 
 sub due_date {
@@ -1788,8 +1898,8 @@ sub balance_due_date {
   my $self = shift;
   my $conf = $self->conf;
   my $duedate = '';
-  if (    $conf->exists('invoice_default_terms') 
-       && $conf->config('invoice_default_terms')=~ /^\s*Net\s*(\d+)\s*$/ ) {
+  my $terms = $self->terms;
+  if ( $terms =~ /^\s*Net\s*(\d+)\s*$/ ) {
     $duedate = $self->time2str_local('rdate', $self->_date + ($1*86400) );
   }
   $duedate;
@@ -1981,27 +2091,20 @@ sub _items_sections {
                   ! $cust_bill_pkg->feepart   and
                   ! $section;
 
-          if (! $type || $type eq 'S') {
+          if ( $type eq 'S' ) {
             $subtotal{$locationnum}{$section} += $cust_bill_pkg->setup
               if $cust_bill_pkg->setup != 0
               || $cust_bill_pkg->setup_show_zero;
-          }
-
-          if (! $type) {
-            $subtotal{$locationnum}{$section} += $cust_bill_pkg->recur
-              if $cust_bill_pkg->recur != 0
-              || $cust_bill_pkg->recur_show_zero;
-          }
-
-          if ($type && $type eq 'R') {
+          } elsif ( $type eq 'R' ) {
             $subtotal{$locationnum}{$section} += $cust_bill_pkg->recur - $usage
               if $cust_bill_pkg->recur != 0
               || $cust_bill_pkg->recur_show_zero;
-          }
-          
-          if ($type && $type eq 'U') {
+          } elsif ( $type eq 'U' ) {
             $subtotal{$locationnum}{$section} += $usage
               unless scalar(@extra_sections);
+          } elsif ( !$type ) {
+            $subtotal{$locationnum}{$section} += $cust_bill_pkg->setup
+                                               + $cust_bill_pkg->recur;
           }
 
         }
@@ -2047,15 +2150,16 @@ sub _items_sections {
           $section->{'sort_weight'} = sprintf('%012s',$location->zip) .
                                       $locationnum;
           $section->{'location'} = {
+            label_prefix => &{ $escape }($location->label_prefix),
             map { $_ => &{ $escape }($location->get($_)) }
-            $location->fields
+              $location->fields
           };
         } else {
           $section->{'category'} = $sectionname;
           $section->{'description'} = &{ $escape }($sectionname);
-          if ( _pkg_category($_) ) {
-            $section->{'sort_weight'} = _pkg_category($_)->weight;
-            if ( _pkg_category($_)->condense ) {
+          if ( _pkg_category($sectionname) ) {
+            $section->{'sort_weight'} = _pkg_category($sectionname)->weight;
+            if ( _pkg_category($sectionname)->condense ) {
               $section = { %$section, $self->_condense_section($opt{format}) };
             }
           }
@@ -2497,6 +2601,9 @@ location (whichever is defined).
 multisection: a flag indicating that this is a multisection invoice,
 which does something complicated.
 
+preref_callback: coderef run for each line item, code should return HTML to be
+displayed before that line item (quotations only)
+
 Returns a list of hashrefs, each of which may contain:
 
 pkgnum, description, amount, unit_amount, quantity, pkgpart, _is_setup, and 
@@ -2530,16 +2637,21 @@ sub _items_cust_bill_pkg {
   my $cust_main = $self->cust_main;#for per-agent cust_bill-line_item-ate_style
                                    # and location labels
 
-  my @b = ();
-  my ($s, $r, $u) = ( undef, undef, undef );
+  my @b = (); # accumulator for the line item hashes that we'll return
+  my ($s, $r, $u, $d) = ( undef, undef, undef, undef );
+            # the 'current' line item hashes for setup, recur, usage, discount
   foreach my $cust_bill_pkg ( @$cust_bill_pkgs )
   {
-
-    foreach ( $s, $r, ($opt{skip_usage} ? () : $u ) ) {
+    # if the current line item is waiting to go out, and the one we're about
+    # to start is not bundled, then push out the current one and start a new
+    # one.
+    foreach ( $s, $r, ($opt{skip_usage} ? () : $u ), $d ) {
       if ( $_ && !$cust_bill_pkg->hidden ) {
-        $_->{amount}      = sprintf( "%.2f", $_->{amount} ),
+        $_->{amount}      = sprintf( "%.2f", $_->{amount} );
         $_->{amount}      =~ s/^\-0\.00$/0.00/;
-        $_->{unit_amount} = sprintf( "%.2f", $_->{unit_amount} ),
+        if (exists($_->{unit_amount})) {
+          $_->{unit_amount} = sprintf( "%.2f", $_->{unit_amount} );
+        }
         push @b, { %$_ }
           if $_->{amount} != 0
           || $discount_show_always
@@ -2610,6 +2722,7 @@ sub _items_cust_bill_pkg {
         # quotation_pkgs are never fees, so don't worry about the case where
         # part_pkg is undefined
 
+        # and I guess they're never bundled either?
         if ( $cust_bill_pkg->setup != 0 ) {
           my $description = $desc;
           $description .= ' Setup'
@@ -2617,18 +2730,33 @@ sub _items_cust_bill_pkg {
             || $discount_show_always
             || $cust_bill_pkg->recur_show_zero;
           push @b, {
+            'pkgnum'      => $cust_bill_pkg->pkgpart, #so it displays in Ref
             'description' => $description,
             'amount'      => sprintf("%.2f", $cust_bill_pkg->setup),
+            'unit_amount' => sprintf("%.2f", $cust_bill_pkg->unitsetup),
+            'quantity'    => $cust_bill_pkg->quantity,
+            'preref_html' => ( $opt{preref_callback}
+                                 ? &{ $opt{preref_callback} }( $cust_bill_pkg )
+                                 : ''
+                             ),
           };
         }
         if ( $cust_bill_pkg->recur != 0 ) {
           push @b, {
+            'pkgnum'      => $cust_bill_pkg->pkgpart, #so it displays in Ref
             'description' => "$desc (". $cust_bill_pkg->part_pkg->freq_pretty.")",
             'amount'      => sprintf("%.2f", $cust_bill_pkg->recur),
+            'unit_amount' => sprintf("%.2f", $cust_bill_pkg->unitrecur),
+            'quantity'    => $cust_bill_pkg->quantity,
+           'preref_html'  => ( $opt{preref_callback}
+                                 ? &{ $opt{preref_callback} }( $cust_bill_pkg )
+                                 : ''
+                             ),
           };
         }
 
-      } elsif ( $cust_bill_pkg->pkgnum > 0 ) { # and it's not a quotation_pkg
+      } elsif ( $cust_bill_pkg->pkgnum > 0 ) {
+        # a "normal" package line item (not a quotation, not a fee, not a tax)
 
         warn "$me _items_cust_bill_pkg cust_bill_pkg is non-tax\n"
           if $DEBUG > 1;
@@ -2907,6 +3035,68 @@ sub _items_cust_bill_pkg {
 
         } # recurring or usage with recurring charge
 
+        # decide whether to show active discounts here
+        if (
+            # case 1: we are showing a single line for the package
+            ( !$type )
+            # case 2: we are showing a setup line for a package that has
+            # no base recurring fee
+            or ( $type eq 'S' and $cust_bill_pkg->unitrecur == 0 )
+            # case 3: we are showing a recur line for a package that has 
+            # a base recurring fee
+            or ( $type eq 'R' and $cust_bill_pkg->unitrecur > 0 )
+        ) {
+
+          # the line item hashref for the line that will show the original
+          # price
+          # (use the recur or single line for the package, unless we're 
+          # showing a setup line for a package with no recurring fee)
+          my $active_line = $r;
+          if ( $type eq 'S' ) {
+            $active_line = $s;
+          }
+
+          my @discounts = $cust_bill_pkg->cust_bill_pkg_discount;
+          # special case: if there are old "discount details" on this line 
+          # item, don't show discount line items
+          if ( FS::cust_bill_pkg_detail->count(
+              "detail LIKE 'Includes discount%' AND billpkgnum = " .
+              $cust_bill_pkg->billpkgnum
+             ) > 0 ) {
+             @discounts = ();
+          }
+          if( @discounts ) {
+            warn "$me _items_cust_bill_pkg including discounts for ".
+              $cust_bill_pkg->billpkgnum."\n"
+              if $DEBUG;
+            my $discount_amount = sum( map {$_->amount} @discounts );
+            # if multiple discounts apply to the same package, how to display
+            # them? ext_description lines, apparently
+            #
+            # # discount amounts are negative
+            if ( $d and $cust_bill_pkg->hidden ) {
+              $d->{amount}      -= $discount_amount;
+            } else {
+              my @ext;
+              $d = {
+                _is_discount    => 1,
+                description     => $self->mt('Discount'),
+                amount          => -1 * $discount_amount,
+                ext_description => \@ext,
+              };
+              foreach my $cust_bill_pkg_discount (@discounts) {
+                my $def = $cust_bill_pkg_discount->cust_pkg_discount->discount;
+                push @ext, &{$escape_function}( $def->description );
+              }
+            }
+
+            # update the active line (before the discount) to show the 
+            # original price (whether this is a hidden line or not)
+            $active_line->{amount} += $discount_amount;
+            
+          } # if there are any discounts
+        } # if this is an appropriate place to show discounts
+
       } else { # taxes and fees
 
         warn "$me _items_cust_bill_pkg cust_bill_pkg is tax\n"
@@ -2928,13 +3118,14 @@ sub _items_cust_bill_pkg {
 
   }
 
-  foreach ( $s, $r, ($opt{skip_usage} ? () : $u ) ) {
+  foreach ( $s, $r, ($opt{skip_usage} ? () : $u ), $d ) {
     if ( $_  ) {
       $_->{amount}      = sprintf( "%.2f", $_->{amount} ),
         if exists($_->{amount});
       $_->{amount}      =~ s/^\-0\.00$/0.00/;
-      $_->{unit_amount} = sprintf('%.2f', $_->{unit_amount})
-        if exists($_->{unit_amount});
+      if (exists($_->{unit_amount})) {
+        $_->{unit_amount} = sprintf( "%.2f", $_->{unit_amount} );
+      }
 
       push @b, { %$_ }
         if $_->{amount} != 0

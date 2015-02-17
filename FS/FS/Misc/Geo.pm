@@ -6,8 +6,7 @@ use vars qw( $DEBUG @EXPORT_OK $conf );
 use LWP::UserAgent;
 use HTTP::Request;
 use HTTP::Request::Common qw( GET POST );
-use HTTP::Cookies;
-use HTML::TokeParser;
+use JSON;
 use URI::Escape 3.31;
 use Data::Dumper;
 use FS::Conf;
@@ -29,7 +28,7 @@ FS::Misc::Geo - routines to fetch geographic information
 
 =over 4
 
-=item get_censustract LOCATION YEAR
+=item get_censustract_ffiec LOCATION YEAR
 
 Given a location hash (see L<FS::location_Mixin>) and a census map year,
 returns a census tract code (consisting of state, county, and tract 
@@ -41,105 +40,65 @@ sub get_censustract_ffiec {
   my $class = shift;
   my $location = shift;
   my $year  = shift;
+  $year ||= 2013;
+
+  if ( length($location->{country}) and uc($location->{country}) ne 'US' ) {
+    return '';
+  }
 
   warn Dumper($location, $year) if $DEBUG;
 
-  my $url = 'http://www.ffiec.gov/Geocode/default.aspx';
+  # the old FFIEC geocoding service was shut down December 1, 2014.
+  # welcome to the future.
+  my $url = 'https://geomap.ffiec.gov/FFIECGeocMap/GeocodeMap1.aspx/GetGeocodeData';
+  # build the single-line query
+  my $single_line = join(', ', $location->{address1},
+                               $location->{city},
+                               $location->{state}
+                        );
+  my $hashref = { sSingleLine => $single_line, iCensusYear => $year };
+  my $request = POST( $url,
+    'Content-Type' => 'application/json; charset=utf-8',
+    'Accept' => 'application/json',
+    'Content' => encode_json($hashref)
+  );
 
-  my $return = {};
-  my $error = '';
-
-  my $ua = new LWP::UserAgent('cookie_jar' => HTTP::Cookies->new);
-  my $res = $ua->request( GET( $url ) );
+  my $ua = new LWP::UserAgent;
+  my $res = $ua->request( $request );
 
   warn $res->as_string
     if $DEBUG > 2;
 
   if (!$res->is_success) {
 
-    $error = $res->message;
+    die "Census tract lookup error: ".$res->message;
+
+  }
+
+  local $@;
+  my $content = eval { decode_json($res->content) };
+  die "Census tract JSON error: $@\n" if $@;
+
+  if ( !exists $content->{d}->{sStatus} ) {
+    die "Census tract response is missing a status indicator.\nThis is an FFIEC problem.\n";
+  }
+  if ( $content->{d}->{sStatus} eq 'Y' ) {
+    # success
+    # this also contains the (partial) standardized address, correct zip 
+    # code, coordinates, etc., and we could get all of them, but right now
+    # we only want the census tract
+    my $tract = join('', $content->{d}->{sStateCode},
+                         $content->{d}->{sCountyCode},
+                         $content->{d}->{sTractCode});
+    return $tract;
 
   } else {
 
-    my $content = $res->content;
+    my $error = $content->{d}->{sMsg}
+            ||  'FFIEC lookup failed, but with no status message.';
+    die "$error\n";
 
-    my $p = new HTML::TokeParser \$content;
-    my $viewstate;
-    my $eventvalidation;
-    while (my $token = $p->get_tag('input') ) {
-      if ($token->[1]->{name} eq '__VIEWSTATE') {
-        $viewstate = $token->[1]->{value};
-      }
-      if ($token->[1]->{name} eq '__EVENTVALIDATION') {
-        $eventvalidation = $token->[1]->{value};
-      }
-      last if $viewstate && $eventvalidation;
-    }
-
-    if (!$viewstate or !$eventvalidation ) {
-
-      $error = "either no __VIEWSTATE or __EVENTVALIDATION found";
-
-    } else {
-
-      my($zip5, $zip4) = split('-',$location->{zip});
-
-      $year ||= '2013';
-      my @ffiec_args = (
-        __VIEWSTATE => $viewstate,
-        __EVENTVALIDATION => $eventvalidation,
-        __VIEWSTATEENCRYPTED => '',
-        ddlbYear    => $year,
-        txtAddress  => $location->{address1},
-        txtCity     => $location->{city},  
-        ddlbState   => $location->{state},
-        txtZipCode  => $zip5,
-        btnSearch   => 'Search',
-      );
-      warn join("\n", @ffiec_args )
-        if $DEBUG > 1;
-
-      push @{ $ua->requests_redirectable }, 'POST';
-      $res = $ua->request( POST( $url, \@ffiec_args ) );
-      warn $res->as_string
-        if $DEBUG > 2;
-
-      unless ($res->code  eq '200') {
-
-        $error = $res->message;
-
-      } else {
-
-        my @id = qw( MSACode StateCode CountyCode TractCode );
-        $content = $res->content;
-        warn $res->content if $DEBUG > 2;
-        $p = new HTML::TokeParser \$content;
-        my $prefix = 'UcGeoResult11_lb';
-        my $compare =
-          sub { my $t=shift; scalar( grep { lc($t) eq lc("$prefix$_")} @id ) };
-
-        while (my $token = $p->get_tag('span') ) {
-          next unless ( $token->[1]->{id} && &$compare( $token->[1]->{id} ) );
-          $token->[1]->{id} =~ /^$prefix(\w+)$/;
-          $return->{lc($1)} = $p->get_trimmed_text("/span");
-        }
-
-        unless ( $return->{tractcode} ) {
-          warn "$error: $content ". Dumper($return) if $DEBUG;
-          $error = "No census tract found";
-        }
-        $return->{tractcode} .= ' '
-          unless $error || $JSON::VERSION >= 2; #broken JSON 1 workaround
-
-      } #unless ($res->code  eq '200')
-
-    } #unless ($viewstate)
-
-  } #unless ($res->code  eq '200')
-
-  die "FFIEC Geocoding error: $error\n" if $error;
-
-  $return->{'statecode'} .  $return->{'countycode'} .  $return->{'tractcode'};
+  }
 }
 
 #sub get_district_methods {
@@ -331,87 +290,6 @@ sub standardize_usps {
     zip       => $zip,
     country   => 'US',
     addr_clean=> 'Y' }
-}
-
-my %ezlocate_error = ( # USA_Geo_002 documentation
-  10  => 'State not found',
-  11  => 'City not found',
-  12  => 'Invalid street address',
-  14  => 'Street name not found',
-  15  => 'Address range does not exist',
-  16  => 'Ambiguous address',
-  17  => 'Intersection not found', #unused?
-);
-
-sub standardize_ezlocate {
-  my $self = shift;
-  my $location = shift;
-  my $class;
-  #if ( $location->{country} eq 'US' ) {
-  #  $class = 'USA_Geo_004Tool';
-  #}
-  #elsif ( $location->{country} eq 'CA' ) {
-  #  $class = 'CAN_Geo_001Tool';
-  #}
-  #else { # shouldn't be a fatal error, just pass through unverified address
-  #  warn "standardize_teleatlas: address lookup in '".$location->{country}.
-  #       "' not available\n";
-  #  return $location;
-  #}
-  #my $path = $conf->config('teleatlas-path') || '';
-  #local @INC = (@INC, $path);
-  #eval "use $class;";
-  #if ( $@ ) {
-  #  die "Loading $class failed:\n$@".
-  #      "\nMake sure the TeleAtlas Perl SDK is installed correctly.\n";
-  #}
-
-  $class = 'Geo::EZLocate'; # use our own library
-  eval "use $class 0.02"; #Geo::EZLocate 0.02 for error handling
-  die $@ if $@;
-
-  my $userid = $conf->config('ezlocate-userid')
-    or die "no ezlocate-userid configured\n";
-  my $password = $conf->config('ezlocate-password')
-    or die "no ezlocate-password configured\n";
-  
-  my $tool = $class->new($userid, $password);
-  my $match = $tool->findAddress(
-    $location->{address1},
-    $location->{city},
-    $location->{state},
-    $location->{zip}, #12345-6789 format is allowed
-  );
-  warn "ezlocate returned match:\n".Dumper($match) if $DEBUG > 1;
-  # error handling - B codes indicate success
-  die $ezlocate_error{$match->{MAT_STAT}}."\n"
-    unless $match->{MAT_STAT} =~ /^B\d$/;
-
-  my %result = (
-    address1    => $match->{MAT_ADDR},
-    address2    => $location->{address2},
-    city        => $match->{MAT_CITY},
-    state       => $match->{MAT_ST},
-    country     => $location->{country},
-    zip         => $match->{MAT_ZIP},
-    latitude    => $match->{MAT_LAT},
-    longitude   => $match->{MAT_LON},
-    censustract => $match->{FIPS_ST}.$match->{FIPS_CTY}.
-                   sprintf('%07.2f',$match->{CEN_TRCT}),
-    addr_clean  => 'Y',
-  );
-  if ( $match->{STD_ADDR} ) {
-    # then they have a postal standardized address for us
-    %result = ( %result,
-      address1    => $match->{STD_ADDR},
-      address2    => $location->{address2},
-      city        => $match->{STD_CITY},
-      state       => $match->{STD_ST},
-      zip         => $match->{STD_ZIP}.'-'.$match->{STD_P4},
-    );
-  }
-
-  \%result;
 }
 
 sub _tomtom_query { # helper method for the below

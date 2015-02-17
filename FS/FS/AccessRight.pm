@@ -93,11 +93,9 @@ tie my %rights, 'Tie::IxHash',
     'New prospect',
     'View prospect',
     'Edit prospect',
-    'List prospects',
     'Edit contact', #!
     #'New contact',
     #'View customer contacts',
-    #'List contacts',
     'Generate quotation',
   ],
   
@@ -153,6 +151,7 @@ tie my %rights, 'Tie::IxHash',
     'Waive setup fee', #NEW
     'View appointments', #NEWNEW
     'Make appointment',
+    'View package definition costs', #NEWNEW
   ],
   
   ###
@@ -218,6 +217,7 @@ tie my %rights, 'Tie::IxHash',
   ###
   'Customer credit and refund rights' => [
     'Post credit',
+    { rightname=>'Backdate credit', desc=>'Enable credits to be posted for days other than today.' },
     'Credit line items', #NEWNEWNEW
     'Apply credit', #NEWNEW
     { rightname=>'Unapply credit', desc=>'Enable "unapplication" of unclosed credits.' }, #aka unapplycredits
@@ -268,6 +268,8 @@ tie my %rights, 'Tie::IxHash',
   # report/listing rights...
   ###
   'Reporting/listing rights' => [
+    'List prospects',
+    'List contacts',
     'List customers',
     'List all customers',
     'Advanced customer search',
@@ -309,6 +311,7 @@ tie my %rights, 'Tie::IxHash',
     'Services: Mailing lists',
     'Services: Alarm services',
     'Services: Video',
+    'Services: Circuits',
     'Services: External services',
     'Usage: RADIUS sessions',
     'Usage: Call Detail Records (CDRs)',
@@ -358,6 +361,9 @@ tie my %rights, 'Tie::IxHash',
     'Edit package definition costs',
 
     'Bulk edit package definitions',
+
+    'Edit FCC report configuration',
+    { rightname => 'Edit FCC report configuration for all agents', global=>1 },
 
     'Edit CDR rates',
     #{ rightname=>'Edit global CDR rates', global=>1, },
@@ -439,6 +445,7 @@ sub default_superuser_rights {
     'Credit card void',
     'Echeck void',
     'Void invoices',#people are overusing this when credits are more appropriate
+    'Backdate credit',
   );
 
   no warnings 'uninitialized';

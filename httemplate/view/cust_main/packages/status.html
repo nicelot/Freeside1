@@ -48,7 +48,8 @@
 %
 %   if ( $cust_pkg->get('susp') ) { #suspended or on hold
 %
-%     if ( $cust_pkg->order_date eq $cust_pkg->get('susp') ) { #status: on hold
+%     #if ( $cust_pkg->order_date eq $cust_pkg->get('susp') ) { # inconsistent with FS::cust_pkg::status
+%     if ( ! $cust_pkg->setup ) { #status: on hold
 
         <% pkg_status_row( $cust_pkg, emt('On Hold'), '', 'color'=>'7E0079', %opt ) %>
 
@@ -581,6 +582,7 @@ sub pkg_suspend_link {
              'actionlabel' => emt('Suspend'),
              'color'       => '#FF9900',
              'cust_pkg'    => shift,
+             'height'      => 420,
          )
 }
 
@@ -591,6 +593,7 @@ sub pkg_adjourn_link {
              'actionlabel' => emt('Adjourn'),
              'color'       => '#CC6600',
              'cust_pkg'    => shift,
+             'height'      => 445,
          )
 }
 

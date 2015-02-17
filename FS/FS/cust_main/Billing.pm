@@ -23,6 +23,7 @@ use FS::part_event_condition;
 use FS::pkg_category;
 use FS::cust_event_fee;
 use FS::Log;
+use FS::TaxEngine;
 
 # 1 is mostly method/subroutine entry and options
 # 2 traces progress of some operations
@@ -106,8 +107,9 @@ options of those methods are also available.
 sub bill_and_collect {
   my( $self, %options ) = @_;
 
-  my $log = FS::Log->new('bill_and_collect');
-  $log->debug('start', object => $self, agentnum => $self->agentnum);
+  my $log = FS::Log->new('FS::cust_main::Billing::bill_and_collect');
+  my %logopt = (object => $self);
+  $log->debug('start', %logopt);
 
   my $error;
 
@@ -123,6 +125,7 @@ sub bill_and_collect {
                     );
 
   $job->update_statustext('0,cleaning expired packages') if $job;
+  $log->debug('canceling expired packages', %logopt);
   $error = $self->cancel_expired_pkgs( $actual_time );
   if ( $error ) {
     $error = "Error expiring custnum ". $self->custnum. ": $error";
@@ -131,6 +134,7 @@ sub bill_and_collect {
     else                                                     { warn   $error; }
   }
 
+  $log->debug('suspending adjourned packages', %logopt);
   $error = $self->suspend_adjourned_pkgs( $actual_time );
   if ( $error ) {
     $error = "Error adjourning custnum ". $self->custnum. ": $error";
@@ -139,6 +143,7 @@ sub bill_and_collect {
     else                                                     { warn   $error; }
   }
 
+  $log->debug('unsuspending resumed packages', %logopt);
   $error = $self->unsuspend_resumed_pkgs( $actual_time );
   if ( $error ) {
     $error = "Error resuming custnum ".$self->custnum. ": $error";
@@ -148,6 +153,7 @@ sub bill_and_collect {
   }
 
   $job->update_statustext('20,billing packages') if $job;
+  $log->debug('billing packages', %logopt);
   $error = $self->bill( %options );
   if ( $error ) {
     $error = "Error billing custnum ". $self->custnum. ": $error";
@@ -157,6 +163,7 @@ sub bill_and_collect {
   }
 
   $job->update_statustext('50,applying payments and credits') if $job;
+  $log->debug('applying payments and credits', %logopt);
   $error = $self->apply_payments_and_credits;
   if ( $error ) {
     $error = "Error applying custnum ". $self->custnum. ": $error";
@@ -165,10 +172,24 @@ sub bill_and_collect {
     else                                                     { warn   $error; }
   }
 
-  $job->update_statustext('70,running collection events') if $job;
-  unless ( $conf->exists('cancelled_cust-noevents')
-           && ! $self->num_ncancelled_pkgs
-  ) {
+  # In a batch tax environment, do not run collection if any pending 
+  # invoices were created.  Collection will run after the next tax batch.
+  my $tax = FS::TaxEngine->new;
+  if ( $tax->info->{batch} and 
+       qsearch('cust_bill', { custnum => $self->custnum, pending => 'Y' })
+     )
+  {
+    warn "skipped collection for custnum ".$self->custnum.
+         " due to pending invoices\n" if $DEBUG;
+  } elsif ( $conf->exists('cancelled_cust-noevents')
+             && ! $self->num_ncancelled_pkgs )
+  {
+    warn "skipped collection for custnum ".$self->custnum.
+         " because they have no active packages\n" if $DEBUG;
+  } else {
+    # run collection normally
+    $job->update_statustext('70,running collection events') if $job;
+    $log->debug('running collection events', %logopt);
     $error = $self->collect( %options );
     if ( $error ) {
       $error = "Error collecting custnum ". $self->custnum. ": $error";
@@ -177,8 +198,9 @@ sub bill_and_collect {
       else                                                   { warn   $error; }
     }
   }
+
   $job->update_statustext('100,finished') if $job;
-  $log->debug('finish', object => $self, agentnum => $self->agentnum);
+  $log->debug('finish', %logopt);
 
   '';
 
@@ -371,7 +393,10 @@ sub bill {
   return '' if $self->payby eq 'COMP';
 
   local($DEBUG) = $FS::cust_main::DEBUG if $FS::cust_main::DEBUG > $DEBUG;
+  my $log = FS::Log->new('FS::cust_main::Billing::bill');
+  my %logopt = (object => $self);
 
+  $log->debug('start', %logopt);
   warn "$me bill customer ". $self->custnum. "\n"
     if $DEBUG;
 
@@ -400,11 +425,13 @@ sub bill {
   local $FS::UID::AutoCommit = 0;
   my $dbh = dbh;
 
+  $log->debug('acquiring lock', %logopt);
   warn "$me acquiring lock on customer ". $self->custnum. "\n"
     if $DEBUG;
 
   $self->select_for_update; #mutex
 
+  $log->debug('running pre-bill events', %logopt);
   warn "$me running pre-bill events for customer ". $self->custnum. "\n"
     if $DEBUG;
 
@@ -420,6 +447,7 @@ sub bill {
     return $error;
   }
 
+  $log->debug('done running pre-bill events', %logopt);
   warn "$me done running pre-bill events for customer ". $self->custnum. "\n"
     if $DEBUG;
 
@@ -436,11 +464,19 @@ sub bill {
   my %total_setup   = map { my $z = 0; $_ => \$z; } @passes;
   my %total_recur   = map { my $z = 0; $_ => \$z; } @passes;
 
-  my %taxlisthash = map { $_ => {} } @passes;
-
   my @precommit_hooks = ();
 
   $options{'pkg_list'} ||= [ $self->ncancelled_pkgs ];  #param checks?
+  
+  my %tax_engines;
+  my $tax_is_batch = '';
+  foreach (@passes) {
+    $tax_engines{$_} = FS::TaxEngine->new(cust_main    => $self,
+                                          invoice_time => $invoice_time,
+                                          cancel       => $options{cancel}
+                                         );
+    $tax_is_batch ||= $tax_engines{$_}->info->{batch};
+  }
 
   foreach my $cust_pkg ( @{ $options{'pkg_list'} } ) {
 
@@ -450,6 +486,7 @@ sub bill {
 
     next if $options{'no_prepaid'} && $part_pkg->is_prepaid;
 
+    $log->debug('bill package '. $cust_pkg->pkgnum, %logopt);
     warn "  bill package ". $cust_pkg->pkgnum. "\n" if $DEBUG;
 
     #? to avoid use of uninitialized value errors... ?
@@ -500,7 +537,7 @@ sub bill {
                               'line_items'          => $cust_bill_pkg{$pass},
                               'setup'               => $total_setup{$pass},
                               'recur'               => $total_recur{$pass},
-                              'tax_matrix'          => $taxlisthash{$pass},
+                              'tax_engine'          => $tax_engines{$pass},
                               'time'                => $time,
                               'real_pkgpart'        => $real_pkgpart,
                               'options'             => \%options,
@@ -625,13 +662,9 @@ sub bill {
 
       my $part_fee = $fee_item->part_fee;
       my $fee_location = $self->ship_location; # I think?
+      
+      my $error = $tax_engines{''}->add_sale($fee_item);
 
-      my $error = $self->_handle_taxes(
-        $taxlisthash{$pass},
-        $fee_item,
-        location => $fee_location
-        # probably not right to pass cancel => 1 for fees
-      );
       return $error if $error;
 
     }
@@ -668,7 +701,7 @@ sub bill {
                                 'line_items'          => \@cust_bill_pkg,
                                 'setup'               => $total_setup{$pass},
                                 'recur'               => $total_recur{$pass},
-                                'tax_matrix'          => $taxlisthash{$pass},
+                                'tax_engine'          => $tax_engines{$pass},
                                 'time'                => $time,
                                 'real_pkgpart'        => $real_pkgpart,
                                 'options'             => \%postal_options,
@@ -686,21 +719,8 @@ sub bill {
 
     }
 
-    my $listref_or_error =
-      $self->calculate_taxes( \@cust_bill_pkg, $taxlisthash{$pass}, $invoice_time);
-
-    unless ( ref( $listref_or_error ) ) {
-      $dbh->rollback if $oldAutoCommit && !$options{no_commit};
-      return $listref_or_error;
-    }
-
-    foreach my $taxline ( @$listref_or_error ) {
-      ${ $total_setup{$pass} } =
-        sprintf('%.2f', ${ $total_setup{$pass} } + $taxline->setup );
-      push @cust_bill_pkg, $taxline;
-    }
-
     #add tax adjustments
+    #XXX does this work with batch tax engines?
     warn "adding tax adjustments...\n" if $DEBUG > 2;
     foreach my $cust_tax_adjustment (
       qsearch('cust_tax_adjustment', { 'custnum'    => $self->custnum,
@@ -730,15 +750,18 @@ sub bill {
 
     my $charged = sprintf('%.2f', ${ $total_setup{$pass} } + ${ $total_recur{$pass} } );
 
-    my @cust_bill = $self->cust_bill;
     my $balance = $self->balance;
-    my $previous_bill = $cust_bill[-1] if @cust_bill;
-    my $previous_balance = 0;
-    if ( $previous_bill ) {
-      $previous_balance = $previous_bill->billing_balance 
-                        + $previous_bill->charged;
-    }
 
+    my $previous_bill = qsearchs({ 'table'     => 'cust_bill',
+                                   'hashref'   => { custnum=>$self->custnum },
+                                   'extra_sql' => 'ORDER BY _date DESC LIMIT 1',
+                                });
+    my $previous_balance =
+      $previous_bill
+        ? ( $previous_bill->billing_balance + $previous_bill->charged )
+        : 0;
+
+    $log->debug('creating the new invoice', %logopt);
     warn "creating the new invoice\n" if $DEBUG;
     #create the new invoice
     my $cust_bill = new FS::cust_bill ( {
@@ -749,12 +772,63 @@ sub bill {
       'previous_balance'    => $previous_balance,
       'invoice_terms'       => $options{'invoice_terms'},
       'cust_bill_pkg'       => \@cust_bill_pkg,
+      'pending'             => 'Y', # clear this after doing taxes
     } );
-    $error = $cust_bill->insert unless $options{no_commit};
-    if ( $error ) {
-      $dbh->rollback if $oldAutoCommit && !$options{no_commit};
-      return "can't create invoice for customer #". $self->custnum. ": $error";
+
+    if (!$options{no_commit}) {
+      # probably we ought to insert it as pending, and then rollback
+      # without ever un-pending it
+      $error = $cust_bill->insert;
+      if ( $error ) {
+        $dbh->rollback if $oldAutoCommit && !$options{no_commit};
+        return "can't create invoice for customer #". $self->custnum. ": $error";
+      }
+
     }
+
+    # calculate and append taxes
+    if ( ! $tax_is_batch) {
+      my $arrayref_or_error = $tax_engines{$pass}->calculate_taxes($cust_bill);
+
+      unless ( ref( $arrayref_or_error ) ) {
+        $dbh->rollback if $oldAutoCommit && !$options{no_commit};
+        return $arrayref_or_error;
+      }
+
+      # or should this be in TaxEngine?
+      my $total_tax = 0;
+      foreach my $taxline ( @$arrayref_or_error ) {
+        $total_tax += $taxline->setup;
+        $taxline->set('invnum' => $cust_bill->invnum); # just to be sure
+        push @cust_bill_pkg, $taxline; # for return_bill
+
+        if (!$options{no_commit}) {
+          my $error = $taxline->insert;
+          if ( $error ) {
+            $dbh->rollback if $oldAutoCommit;
+            return $error;
+          }
+        }
+
+      }
+
+      # add tax to the invoice amount and finalize it
+      ${ $total_setup{$pass} } = sprintf('%.2f', ${ $total_setup{$pass} } + $total_tax);
+      $charged = sprintf('%.2f', $charged + $total_tax);
+      $cust_bill->set('charged', $charged);
+      $cust_bill->set('pending', '');
+
+      if (!$options{no_commit}) {
+        my $error = $cust_bill->replace;
+        if ( $error ) {
+          $dbh->rollback if $oldAutoCommit;
+          return $error;
+        }
+      }
+
+    } # if !$tax_is_batch
+      # if it IS batch, then we'll do all this in process_tax_batch
+
     push @{$options{return_bill}}, $cust_bill if $options{return_bill};
 
   } #foreach my $pass ( keys %cust_bill_pkg )
@@ -827,204 +901,6 @@ sub _omit_zero_value_bundles {
 
 }
 
-=item calculate_taxes LINEITEMREF TAXHASHREF INVOICE_TIME
-
-Generates tax line items (see L<FS::cust_bill_pkg>) for this customer.
-Usually used internally by bill method B<bill>.
-
-If there is an error, returns the error, otherwise returns reference to a
-list of line items suitable for insertion.
-
-=over 4
-
-=item LINEITEMREF
-
-An array ref of the line items being billed.
-
-=item TAXHASHREF
-
-A strange beast.  The keys to this hash are internal identifiers consisting
-of the name of the tax object type, a space, and its unique identifier ( e.g.
- 'cust_main_county 23' ).  The values of the hash are listrefs.  The first
-item in the list is the tax object.  The remaining items are either line
-items or floating point values (currency amounts).
-
-The taxes are calculated on this entity.  Calculated exemption records are
-transferred to the LINEITEMREF items on the assumption that they are related.
-
-Read the source.
-
-=item INVOICE_TIME
-
-This specifies the date appearing on the associated invoice.  Some
-jurisdictions (i.e. Texas) have tax exemptions which are date sensitive.
-
-=back
-
-=cut
-
-sub calculate_taxes {
-  my ($self, $cust_bill_pkg, $taxlisthash, $invoice_time) = @_;
-
-  # $taxlisthash is a hashref
-  # keys are identifiers, values are arrayrefs
-  # each arrayref starts with a tax object (cust_main_county or tax_rate)
-  # then any cust_bill_pkg objects the tax applies to
-
-  local($DEBUG) = $FS::cust_main::DEBUG if $FS::cust_main::DEBUG > $DEBUG;
-
-  warn "$me calculate_taxes\n"
-       #.Dumper($self, $cust_bill_pkg, $taxlisthash, $invoice_time). "\n"
-    if $DEBUG > 2;
-
-  my @tax_line_items = ();
-
-  # keys are tax names (as printed on invoices / itemdesc )
-  # values are arrayrefs of taxlisthash keys (internal identifiers)
-  my %taxname = ();
-
-  # keys are taxlisthash keys (internal identifiers)
-  # values are (cumulative) amounts
-  my %tax_amount = ();
-
-  # keys are taxlisthash keys (internal identifiers)
-  # values are arrayrefs of cust_bill_pkg_tax_location hashrefs
-  my %tax_location = ();
-
-  # keys are taxlisthash keys (internal identifiers)
-  # values are arrayrefs of cust_bill_pkg_tax_rate_location hashrefs
-  my %tax_rate_location = ();
-
-  # keys are taxlisthash keys (internal identifiers!)
-  # values are arrayrefs of cust_tax_exempt_pkg objects
-  my %tax_exemption;
-
-  foreach my $tax ( keys %$taxlisthash ) {
-    # $tax is a tax identifier (intersection of a tax definition record
-    # and a cust_bill_pkg record)
-    my $tax_object = shift @{ $taxlisthash->{$tax} };
-    # $tax_object is a cust_main_county or tax_rate 
-    # (with billpkgnum, pkgnum, locationnum set)
-    # the rest of @{ $taxlisthash->{$tax} } is cust_bill_pkg component objects
-    # (setup, recurring, usage classes)
-    warn "found ". $tax_object->taxname. " as $tax\n" if $DEBUG > 2;
-    warn " ". join('/', @{ $taxlisthash->{$tax} } ). "\n" if $DEBUG > 2;
-    # taxline calculates the tax on all cust_bill_pkgs in the 
-    # first (arrayref) argument, and returns a hashref of 'name' 
-    # (the line item description) and 'amount'.
-    # It also calculates exemptions and attaches them to the cust_bill_pkgs
-    # in the argument.
-    my $taxables = $taxlisthash->{$tax};
-    my $exemptions = $tax_exemption{$tax} ||= [];
-    my $taxline = $tax_object->taxline(
-                            $taxables,
-                            'custnum'      => $self->custnum,
-                            'invoice_time' => $invoice_time,
-                            'exemptions'   => $exemptions,
-                          );
-    return $taxline unless ref($taxline);
-
-    unshift @{ $taxlisthash->{$tax} }, $tax_object;
-
-    if ( $tax_object->isa('FS::cust_main_county') ) {
-      # then $taxline is a real line item
-      push @{ $taxname{ $taxline->itemdesc } }, $taxline;
-
-    } else {
-      # leave this as is for now
-
-      my $name   = $taxline->{'name'};
-      my $amount = $taxline->{'amount'};
-
-      #warn "adding $amount as $name\n";
-      $taxname{ $name } ||= [];
-      push @{ $taxname{ $name } }, $tax;
-
-      $tax_amount{ $tax } += $amount;
-
-      # link records between cust_main_county/tax_rate and cust_location
-      $tax_rate_location{ $tax } ||= [];
-      my $taxratelocationnum =
-        $tax_object->tax_rate_location->taxratelocationnum;
-      push @{ $tax_rate_location{ $tax }  },
-        {
-          'taxnum'             => $tax_object->taxnum, 
-          'taxtype'            => ref($tax_object),
-          'amount'             => sprintf('%.2f', $amount ),
-          'locationtaxid'      => $tax_object->location,
-          'taxratelocationnum' => $taxratelocationnum,
-        };
-    } #if ref($tax_object)...
-  } #foreach keys %$taxlisthash
-
-  #consolidate and create tax line items
-  warn "consolidating and generating...\n" if $DEBUG > 2;
-  foreach my $taxname ( keys %taxname ) {
-    my @cust_bill_pkg_tax_location;
-    my @cust_bill_pkg_tax_rate_location;
-    my $tax_cust_bill_pkg = FS::cust_bill_pkg->new({
-        'pkgnum'    => 0,
-        'recur'     => 0,
-        'sdate'     => '',
-        'edate'     => '',
-        'itemdesc'  => $taxname,
-        'cust_bill_pkg_tax_location'      => \@cust_bill_pkg_tax_location,
-        'cust_bill_pkg_tax_rate_location' => \@cust_bill_pkg_tax_rate_location,
-    });
-
-    my $tax_total = 0;
-    my %seen = ();
-    warn "adding $taxname\n" if $DEBUG > 1;
-    foreach my $taxitem ( @{ $taxname{$taxname} } ) {
-      if ( ref($taxitem) eq 'FS::cust_bill_pkg' ) {
-        # then we need to transfer the amount and the links from the
-        # line item to the new one we're creating.
-        $tax_total += $taxitem->setup;
-        foreach my $link ( @{ $taxitem->get('cust_bill_pkg_tax_location') } ) {
-          $link->set('tax_cust_bill_pkg', $tax_cust_bill_pkg);
-          push @cust_bill_pkg_tax_location, $link;
-        }
-      } else {
-        # the tax_rate way
-        next if $seen{$taxitem}++;
-        warn "adding $tax_amount{$taxitem}\n" if $DEBUG > 1;
-        $tax_total += $tax_amount{$taxitem};
-        push @cust_bill_pkg_tax_rate_location,
-          map { new FS::cust_bill_pkg_tax_rate_location $_ }
-              @{ $tax_rate_location{ $taxitem } };
-      }
-    }
-    next unless $tax_total;
-
-    # we should really neverround this up...I guess it's okay if taxline 
-    # already returns amounts with 2 decimal places
-    $tax_total = sprintf('%.2f', $tax_total );
-    $tax_cust_bill_pkg->set('setup', $tax_total);
-  
-    my $pkg_category = qsearchs( 'pkg_category', { 'categoryname' => $taxname,
-                                                   'disabled'     => '',
-                                                 },
-                               );
-
-    my @display = ();
-    if ( $pkg_category and
-         $conf->config('invoice_latexsummary') ||
-         $conf->config('invoice_htmlsummary')
-       )
-    {
-
-      my %hash = (  'section' => $pkg_category->categoryname );
-      push @display, new FS::cust_bill_pkg_display { type => 'S', %hash };
-
-    }
-    $tax_cust_bill_pkg->set('display', \@display);
-
-    push @tax_line_items, $tax_cust_bill_pkg;
-  }
-
-  \@tax_line_items;
-}
-
 sub _make_lines {
   my ($self, %params) = @_;
 
@@ -1037,9 +913,10 @@ sub _make_lines {
   my $cust_bill_pkgs = $params{line_items} or die "no line buffer specified";
   my $total_setup = $params{setup} or die "no setup accumulator specified";
   my $total_recur = $params{recur} or die "no recur accumulator specified";
-  my $taxlisthash = $params{tax_matrix} or die "no tax accumulator specified";
   my $time = $params{'time'} or die "no time specified";
   my (%options) = %{$params{options}};
+
+  my $tax_engine = $params{tax_engine};
 
   if ( $part_pkg->freq ne '1' and ($options{'freq_override'} || 0) > 0 ) {
     # this should never happen
@@ -1069,9 +946,21 @@ sub _make_lines {
   my $setup = 0;
   my $unitsetup = 0;
   my @setup_discounts = ();
-  my %setup_param = ( 'discounts' => \@setup_discounts );
+  my %setup_param = ( 'discounts'     => \@setup_discounts,
+                      'real_pkgpart'  => $params{real_pkgpart}
+                    );
   my $setup_billed_currency = '';
   my $setup_billed_amount = 0;
+  # Conditions for setting setup date and charging the setup fee:
+  # - this is not a recurring-only billing run
+  # - and the package is not currently being canceled
+  # - and, unless we're specifically told otherwise via 'resetup':
+  #   - it doesn't already HAVE a setup date
+  #   - or a start date in the future
+  #   - and it's not suspended
+  #
+  # The last condition used to check the "disable_setup_suspended" option but 
+  # that's obsolete. We now never set the setup date on a suspended package.
   if (     ! $options{recurring_only}
        and ! $options{cancel}
        and ( $options{'resetup'}
@@ -1079,11 +968,7 @@ sub _make_lines {
                   && ( ! $cust_pkg->start_date
                        || $cust_pkg->start_date <= $cmp_time
                      )
-                  && ( ! $conf->exists('disable_setup_suspended_pkgs')
-                       || ( $conf->exists('disable_setup_suspended_pkgs') &&
-                            ! $cust_pkg->getfield('susp')
-                          )
-                     )
+                  && ( ! $cust_pkg->getfield('susp') )
                 )
            )
      )
@@ -1353,9 +1238,8 @@ sub _make_lines {
       ###
       # handle taxes
       ###
-
-      my $error = $self->_handle_taxes( $taxlisthash, $cust_bill_pkg,
-        cancel => $options{cancel} );
+      
+      my $error = $tax_engine->add_sale($cust_bill_pkg);
       return $error if $error;
 
       $cust_bill_pkg->set_display(
@@ -1451,6 +1335,8 @@ sub _transfer_balance {
 
   return @transfers;
 }
+
+#### vestigial code ####
 
 =item handle_taxes TAXLISTHASH CUST_BILL_PKG [ OPTIONS ]
 
@@ -1660,6 +1546,8 @@ sub _gather_taxes {
   [ $part_item->tax_rates('cch', $geocode, $class) ]
 
 }
+
+#### end vestigial code ####
 
 =item collect [ HASHREF | OPTION => VALUE ... ]
 
@@ -2426,13 +2314,9 @@ sub apply_payments {
 
   #return 0 unless
 
-  my @payments = sort { $b->_date <=> $a->_date }
-                 grep { $_->unapplied > 0 }
-                 $self->cust_pay;
+  my @payments = $self->unapplied_cust_pay;
 
-  my @invoices = sort { $a->_date <=> $b->_date}
-                 grep { $_->owed > 0 }
-                 $self->cust_bill;
+  my @invoices = $self->open_cust_bill;
 
   if ( $conf->exists('pkg-balances') ) {
     # limit @payments to those w/ a pkgnum grepped from $self
@@ -2506,10 +2390,7 @@ sub apply_payments {
     bill
       (do_cust_event pre-bill)
       _make_lines
-        _handle_taxes
-          (vendor-only) _gather_taxes
       _omit_zero_value_bundles
-      _handle_taxes (for fees)
       calculate_taxes
 
     apply_payments_and_credits

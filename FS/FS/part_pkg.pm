@@ -122,6 +122,10 @@ part_pkg, will be equal to pkgpart.
 
 =item delay_start - Number of days to delay package start, by default
 
+=item start_on_hold - 'Y' to suspend this package immediately when it is 
+ordered. The package will not start billing or have a setup fee charged 
+until it is manually unsuspended.
+
 =back
 
 =head1 METHODS
@@ -338,7 +342,7 @@ sub insert {
 
   if ( $options{fcc_options} ) {
     warn "  updating fcc options " if $DEBUG;
-    $self->process_fcc_options( $options{fcc_options} );
+    $self->set_fcc_options( $options{fcc_options} );
   }
 
   warn "  committing transaction" if $DEBUG and $oldAutoCommit;
@@ -624,7 +628,7 @@ sub replace {
 
   if ( $options->{fcc_options} ) {
     warn "  updating fcc options " if $DEBUG;
-    $new->process_fcc_options( $options->{fcc_options} );
+    $new->set_fcc_options( $options->{fcc_options} );
   }
 
   warn "  committing transaction" if $DEBUG and $oldAutoCommit;
@@ -672,14 +676,15 @@ sub check {
     || $self->ut_textn('comment')
     || $self->ut_textn('promo_code')
     || $self->ut_alphan('plan')
-    || $self->ut_enum('setuptax', [ '', 'Y' ] )
-    || $self->ut_enum('recurtax', [ '', 'Y' ] )
+    || $self->ut_flag('setuptax')
+    || $self->ut_flag('recurtax')
     || $self->ut_textn('taxclass')
-    || $self->ut_enum('disabled', [ '', 'Y' ] )
-    || $self->ut_enum('custom', [ '', 'Y' ] )
-    || $self->ut_enum('no_auto', [ '', 'Y' ])
-    || $self->ut_enum('recur_show_zero', [ '', 'Y' ])
-    || $self->ut_enum('setup_show_zero', [ '', 'Y' ])
+    || $self->ut_flag('disabled')
+    || $self->ut_flag('custom')
+    || $self->ut_flag('no_auto')
+    || $self->ut_flag('recur_show_zero')
+    || $self->ut_flag('setup_show_zero')
+    || $self->ut_flag('start_on_hold')
     #|| $self->ut_moneyn('setup_cost')
     #|| $self->ut_moneyn('recur_cost')
     || $self->ut_floatn('setup_cost')
@@ -787,14 +792,14 @@ sub propagate {
   join("\n", @error);
 }
 
-=item process_fcc_options HASHREF
+=item set_fcc_options HASHREF
 
 Sets the FCC options on this package definition to the values specified
-in HASHREF.  Names are as in L<FS::part_pkg_fcc_option/info>.
+in HASHREF.
 
 =cut
 
-sub process_fcc_options {
+sub set_fcc_options {
   my $self = shift;
   my $pkgpart = $self->pkgpart;
   my $options;
@@ -807,6 +812,7 @@ sub process_fcc_options {
   my %existing_num = map { $_->fccoptionname => $_->num }
                      qsearch('part_pkg_fcc_option', { pkgpart => $pkgpart });
 
+  local $FS::Record::nowarn_identical = 1;
   # set up params for process_o2m
   my $i = 0;
   my $params = {};
@@ -1129,7 +1135,10 @@ sub is_free {
 sub can_discount { 0; }
  
 # whether the plan allows changing the start date
-sub can_start_date { 1; }
+sub can_start_date {
+  my $self = shift;
+  $self->start_on_hold ? 0 : 1;
+}
 
 # whether the plan supports part_pkg_usageprice add-ons (a specific kind of
 #  pre-selectable usage pricing, there's others this doesn't refer to)
@@ -1287,6 +1296,12 @@ will be suppressed.
 
 sub option {
   my( $self, $opt, $ornull ) = @_;
+
+  #cache: was pulled up in the original part_pkg query
+  if ( $opt =~ /^(setup|recur)_fee$/ && defined($self->hashref->{"_$opt"}) ) {
+    return $self->hashref->{"_$opt"};
+  }
+
   cluck "$self -> option: searching for $opt"
     if $DEBUG;
   my $part_pkg_option =
@@ -1295,12 +1310,14 @@ sub option {
       optionname => $opt,
   } );
   return $part_pkg_option->optionvalue if $part_pkg_option;
+
   my %plandata = map { /^(\w+)=(.*)$/; ( $1 => $2 ); }
                      split("\n", $self->get('plandata') );
   return $plandata{$opt} if exists $plandata{$opt};
   cluck "WARNING: (pkgpart ". $self->pkgpart. ") Package def option $opt ".
         "not found in options or plandata!\n"
     unless $ornull;
+
   '';
 }
 
@@ -1552,8 +1569,10 @@ package in the location specified by GEOCODE, for usage class CLASS (one of
 sub tax_rates {
   my $self = shift;
   my ($vendor, $geocode, $class) = @_;
+  # if this part_pkg is overridden into a specific taxclass, get that class
   my @taxclassnums = map { $_->taxclassnum } 
                      $self->part_pkg_taxoverride($class);
+  # otherwise, get its tax product category
   if (!@taxclassnums) {
     my $part_pkg_taxproduct = $self->taxproduct($class);
     # If this isn't defined, then the class has no taxproduct designation,
@@ -1574,7 +1593,8 @@ sub tax_rates {
   my $extra_sql = "AND taxclassnum IN (". join(',', @taxclassnums) . ")";
   my @taxes = qsearch({ 'table'     => 'tax_rate',
                         'hashref'   => { 'geocode'     => $geocode,
-                                         'data_vendor' => $vendor },
+                                         'data_vendor' => $vendor,
+                                         'disabled'    => '' },
                         'extra_sql' => $extra_sql,
                       });
   warn "Found taxes ". join(',', map {$_->taxnum} @taxes) ."\n"
@@ -1751,7 +1771,7 @@ sub parse {
 # Used by FS::Upgrade to migrate to a new database.
 
 sub _upgrade_data { # class method
-  my($class, %opts) = @_;
+   my($class, %opts) = @_;
 
   warn "[FS::part_pkg] upgrading $class\n" if $DEBUG;
 
@@ -1771,6 +1791,49 @@ sub _upgrade_data { # class method
     $part_pkg->replace;
 
   }
+
+  # Convert RADIUS accounting usage metrics from megabytes to gigabytes
+  # (FS RT#28105)
+  my $upgrade = 'part_pkg_gigabyte_usage';
+  if (!FS::upgrade_journal->is_done($upgrade)) {
+    foreach my $part_pkg (qsearch('part_pkg',
+				  { plan => 'sqlradacct_hour' })
+			 ){
+
+      my $pkgpart = $part_pkg->pkgpart;
+
+      foreach my $opt (qsearch('part_pkg_option',
+			       { 'optionname'  => { op => 'LIKE',
+						    value => 'recur_included_%',
+						  },
+				 pkgpart => $pkgpart,
+			       })){
+
+        next if $opt->optionname eq 'recur_included_hours'; # unfortunately named field
+        next if $opt->optionvalue == 0;
+
+	$opt->optionvalue($opt->optionvalue / 1024);
+
+	my $error = $opt->replace;
+	die $error if $error;
+      }
+
+      foreach my $opt (qsearch('part_pkg_option',
+			       { 'optionname'  => { op => 'LIKE',
+						    value => 'recur_%_charge',
+						  },
+				 pkgpart => $pkgpart,
+			       })){
+	$opt->optionvalue($opt->optionvalue * 1024);
+
+	my $error = $opt->replace;
+	die $error if $error;
+      }
+
+    }
+    FS::upgrade_journal->set_done($upgrade);
+  }
+
   # the rest can be done asynchronously
 }
 

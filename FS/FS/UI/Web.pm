@@ -113,16 +113,16 @@ sub svc_url {
     if $DEBUG;
   if ( $opt{m}->interp->comp_exists("/$opt{action}/$svcdb.cgi") ) {
     $url = "$svcdb.cgi?";
+  } elsif ( $opt{m}->interp->comp_exists("/$opt{action}/$svcdb.html") ) {
+    $url = "$svcdb.html?";
   } else {
-
     my $generic = $opt{action} eq 'search' ? 'cust_svc' : 'svc_Common';
 
     $url = "$generic.html?svcdb=$svcdb;";
     $url .= 'svcnum=' if $query =~ /^\d+(;|$)/ or $query eq '';
   }
 
-  import FS::CGI 'rooturl'; #WTF!  why is this necessary
-  my $return = rooturl(). "$opt{action}/$url$query";
+  my $return = FS::CGI::rooturl(). "$opt{action}/$url$query";
 
   $return = qq!<A HREF="$return">! if $opt{ahref};
 
@@ -225,7 +225,7 @@ sub cust_header {
 
   my %header2method = (
     'Customer'                 => 'name',
-    'Cust. Status'             => 'ucfirst_cust_status',
+    'Cust. Status'             => 'cust_status_label',
     'Cust#'                    => 'custnum',
     'Name'                     => 'contact',
     'Company'                  => 'company',
@@ -250,6 +250,7 @@ sub cust_header {
     'Country'                  => 'bill_country_full',
     'Day phone'                => 'daytime', # XXX should use msgcat, but how?
     'Night phone'              => 'night',   # XXX should use msgcat, but how?
+    'Mobile phone'             => 'mobile',  # XXX should use msgcat, but how?
     'Fax number'               => 'fax',
     '(bill) Address 1'         => 'bill_address1',
     '(bill) Address 2'         => 'bill_address2',
@@ -324,7 +325,7 @@ sub cust_header {
 }
 
 sub cust_sort_fields {
-  cust_header(@_);
+  cust_header(@_) if( @_ or !@cust_fields );
   #inefficientish, but tiny lists and only run once per page
 
   map { $_ eq 'custnum' ? 'custnum' : '' } @cust_fields;
@@ -346,7 +347,7 @@ sub cust_sql_fields {
   my @fields = qw( last first company );
 #  push @fields, map "ship_$_", @fields;
 
-  cust_header(@_);
+  cust_header(@_) if( @_ or !@cust_fields );
   #inefficientish, but tiny lists and only run once per page
 
   my @location_fields;
@@ -363,7 +364,7 @@ sub cust_sql_fields {
     }
   }
 
-  foreach my $field (qw(daytime night fax payby)) {
+  foreach my $field (qw(daytime night mobile fax payby)) {
     push @fields, $field if (grep { $_ eq $field } @cust_fields);
   }
   push @fields, 'agent_custid';
@@ -486,6 +487,7 @@ element.
 
 sub cust_fields_subs {
   my $unlinked_warn = 0;
+
   return map { 
     my $f = $_;
     if ( $unlinked_warn++ ) {
@@ -570,6 +572,19 @@ sub cust_aligns {
   } else {
     join('', @cust_aligns);
   }
+}
+
+=item cust_links
+
+Returns an array of links to view/cust_main.cgi, for use with cust_fields.
+
+=cut
+
+sub cust_links {
+  my $link = [ FS::CGI::rooturl().'view/cust_main.cgi?', 'custnum' ];
+
+  return map { $_ eq 'cust_status_label' ? '' : $link }
+    @cust_fields;
 }
 
 =item is_mobile
@@ -692,14 +707,9 @@ sub start_job {
   #too slow to insert all the cgi params as individual args..,?
   #my $error = $queue->insert('_JOB', $cgi->Vars);
   
-  #warn 'froze string of size '. length(nfreeze(\%param)). " for job args\n"
-  #  if $DEBUG;
-  #
-  #  XXX FS::queue::insert knows how to do this.
-  #  not changing it here because that requires changing it everywhere else,
-  #  too, but we should eventually fix it
+  #rely on FS::queue smartness to freeze/encode the param hash
 
-  my $error = $job->insert( '_JOB', encode_base64(nfreeze(\%param)) );
+  my $error = $job->insert( '_JOB', \%param );
 
   if ( $error ) {
 

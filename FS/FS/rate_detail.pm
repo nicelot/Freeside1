@@ -60,6 +60,13 @@ inherits from FS::Record.  The following fields are currently supported:
 
 =item region_group - Group in region group for rate plan
 
+=item upstream_mult_charge - the multiplier to apply to the upstream price. 
+Defaults to zero, and should stay zero unless this rate is intended to include
+a markup on pre-rated CDRs.
+
+=item upstream_mult_cost - the multiplier to apply to the upstream price to
+calculate the wholesale cost.
+
 =back
 
 =head1 METHODS
@@ -124,7 +131,7 @@ sub check {
        $self->ut_numbern('ratedetailnum')
     || $self->ut_foreign_key('ratenum', 'rate', 'ratenum')
     || $self->ut_foreign_keyn('orig_regionnum', 'rate_region', 'regionnum' )
-    || $self->ut_foreign_key('dest_regionnum', 'rate_region', 'regionnum' )
+    || $self->ut_foreign_keyn('dest_regionnum', 'rate_region', 'regionnum' )
     || $self->ut_number('min_included')
 
     #|| $self->ut_money('min_charge')
@@ -138,6 +145,9 @@ sub check {
 
     || $self->ut_foreign_keyn('classnum', 'usage_class', 'classnum' )
     || $self->ut_enum('region_group',    [ '', 'Y' ])
+
+    || $self->ut_floatn('upstream_mult_charge')
+    || $self->ut_floatn('upstream_mult_cost')
   ;
   return $error if $error;
 
@@ -182,10 +192,11 @@ with this call plan rate.
 
 sub dest_regionname {
   my $self = shift;
-  $self->dest_region->regionname;
+  my $dest_region = $self->dest_region;
+  $dest_region ? $dest_region->regionname : 'Global default';
 }
 
-=item dest_regionname
+=item dest_prefixes_short
 
 Returns a short list of the prefixes for the destination region
 (see L<FS::rate_region>) associated with this call plan rate.
@@ -194,7 +205,8 @@ Returns a short list of the prefixes for the destination region
 
 sub dest_prefixes_short {
   my $self = shift;
-  $self->dest_region->prefixes_short;
+  my $dest_region = $self->dest_region;
+  $dest_region ? $dest_region->prefixes_short : '';
 }
 
 =item rate_time
@@ -298,9 +310,7 @@ sub conn_secs {
 
 =cut
 
-use Storable qw(thaw);
 use Data::Dumper;
-use MIME::Base64;
 sub process_edit_import {
   my $job = shift;
 
@@ -339,7 +349,7 @@ sub process_edit_import {
   my @pass_params = @{ $opt->{params} };
   my %formats = %{ $opt->{formats} };
 
-  my $param = thaw(decode_base64(shift));
+  my $param = shift;
   warn Dumper($param) if $DEBUG;
   
   my $files = $param->{'uploaded_files'}

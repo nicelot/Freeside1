@@ -1114,7 +1114,7 @@ sub reason_type_options {
   {
     'key'         => 'unapplycredits',
     'section'     => 'deprecated',
-    'description' => '<B>DEPRECATED</B>, now controlled by ACLs.  Used to nable "unapplication" of unclosed credits.',
+    'description' => '<B>DEPRECATED</B>, now controlled by ACLs.  Used to enable "unapplication" of unclosed credits.',
     'type'        => 'checkbox',
   },
 
@@ -1527,11 +1527,19 @@ and customer address. Include units.',
     'type'        => 'checkbox',
   },
 
+  {
+    'key'         => 'invoice_print_pdf-duplex',
+    'section'     => 'invoicing',
+    'description' => 'Insert blank pages so that spooled invoices are each an even number of pages.  Use this for double-sided printing.',
+    'type'        => 'checkbox',
+  },
+
   { 
     'key'         => 'invoice_default_terms',
     'section'     => 'invoicing',
     'description' => 'Optional default invoice term, used to calculate a due date printed on invoices.',
     'type'        => 'select',
+    'per_agent'   => 1,
     'select_enum' => [ 
       '', 'Payable upon receipt', 'Net 0', 'Net 3', 'Net 5', 'Net 9', 'Net 10', 'Net 14', 
       'Net 15', 'Net 18', 'Net 20', 'Net 21', 'Net 25', 'Net 30', 'Net 45', 
@@ -1561,11 +1569,19 @@ and customer address. Include units.',
   },
 
   {
-    'key'         => 'invoice_sections_by_location',
+    'key'         => 'invoice_sections_method',
     'section'     => 'invoicing',
-    'description' => 'Divide invoice into sections according to service location.  Currently, this overrides sectioning by package category.',
-    'type'        => 'checkbox',
-    'per_agent'   => 1,
+    'description' => 'How to group line items on multi-section invoices.',
+    'type'        => 'select',
+    'select_enum' => [ qw(category location) ],
+  },
+
+  {
+    'key'         => 'summary_subtotals_method',
+    'section'     => 'invoicing',
+    'description' => 'How to group line items when calculating summary subtotals.  By default, it will be the same method used for grouping invoice sections.',
+    'type'        => 'select',
+    'select_enum' => [ qw(category location) ],
   },
 
   #quotations seem broken-ish with sections ATM?
@@ -2438,8 +2454,9 @@ and customer address. Include units.',
   {
     'key'         => 'enable_taxproducts',
     'section'     => 'billing',
-    'description' => 'Enable per-package mapping to vendor tax data from CCH or elsewhere.',
-    'type'        => 'checkbox',
+    'description' => 'Tax data vendor you are using.',
+    'type'        => 'select',
+    'select_enum' => [ 'cch', 'billsoft', 'avalara' ],
   },
 
   {
@@ -2454,6 +2471,20 @@ and customer address. Include units.',
     'section'     => 'billing',
     'description' => 'Prefer to invoice without tax over not billing at all',
     'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'billsoft-company_code',
+    'section'     => 'billing',
+    'description' => 'Billsoft tax service company code (3 letters)',
+    'type'        => 'text',
+  },
+
+  {
+    'key'         => 'avalara-taxconfig',
+    'section'     => 'billing',
+    'description' => 'Avalara tax service configuration. Four lines: company code, account number, license key, test mode (1 to enable).',
+    'type'        => 'textarea',
   },
 
   {
@@ -2703,6 +2734,20 @@ and customer address. Include units.',
   },
 
   {
+    'key'         => 'backoffice-require_cvv',
+    'section'     => 'billing',
+    'description' => 'Require CVV for manual credit card entry.',
+    'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'selfservice-onfile_require_cvv',
+    'section'     => 'self-service',
+    'description' => 'Require CVV for on-file credit card during self-service payments.',
+    'type'        => 'checkbox',
+  },
+
+  {
     'key'         => 'selfservice-require_cvv',
     'section'     => 'self-service',
     'description' => 'Require CVV for credit card self-service payments, except for cards on-file.',
@@ -2733,6 +2778,22 @@ and customer address. Include units.',
     'section'     => 'billing',
     'description' => "When using manual_process-pkgpart, omit the fee if it is the customer's first payment.",
     'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'selfservice_immutable-package',
+    'section'     => 'self-service',
+    'description' => 'Disable package changes in self-service interface.',
+    'type'        => 'checkbox',
+    'per_agent'   => 1,
+  },
+
+  {
+    'key'         => 'selfservice_hide-usage',
+    'section'     => 'self-service',
+    'description' => 'Hide usage data in self-service interface.',
+    'type'        => 'checkbox',
+    'per_agent'   => 1,
   },
 
   {
@@ -3451,7 +3512,8 @@ and customer address. Include units.',
     'description' => 'Optional "site ID" to show in the location label',
     'type'        => 'select',
     'select_hash' => [ '' => '',
-                       'CoStAg' => 'CoStAgXXXXX (country, state, agent name, locationnum)',
+                       'CoStAg'    => 'CoStAgXXXXX (country, state, agent name, locationnum)',
+                       '_location' => 'Manually defined per location',
                       ],
   },
 
@@ -3477,13 +3539,6 @@ and customer address. Include units.',
   },
 
   {
-    'key'         => 'cust_pkg-show_fcc_voice_grade_equivalent',
-    'section'     => 'UI',
-    'description' => "Show fields on package definitions for FCC Form 477 classification",
-    'type'        => 'checkbox',
-  },
-
-  {
     'key'         => 'cust_pkg-large_pkg_size',
     'section'     => 'UI',
     'description' => "In customer view, summarize packages with more than this many services.  Set to zero to never summarize packages.",
@@ -3494,6 +3549,13 @@ and customer address. Include units.',
     'key'         => 'cust_pkg-hide_discontinued-part_svc',
     'section'     => 'UI',
     'description' => "In customer view, hide provisioned services which are no longer available in the package definition.  Not normally used except for very specific situations as it hides still-provisioned services.",
+    'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'part_pkg-show_fcc_options',
+    'section'     => 'UI',
+    'description' => "Show fields on package definitions for FCC Form 477 classification",
     'type'        => 'checkbox',
   },
 
@@ -3680,7 +3742,7 @@ and customer address. Include units.',
     'type'        => 'select',
     'select_enum' => [ 'NACHA', 'csv-td_canada_trust-merchant_pc_batch',
                        'csv-chase_canada-E-xactBatch', 'BoM', 'PAP',
-                       'paymentech', 'ach-spiritone', 'RBC'
+                       'paymentech', 'ach-spiritone', 'RBC', 'CIBC',
                     ]
   },
 
@@ -3742,7 +3804,7 @@ and customer address. Include units.',
     'type'        => 'select',
     'select_enum' => [ 'NACHA', 'csv-td_canada_trust-merchant_pc_batch', 'BoM',
                        'PAP', 'paymentech', 'ach-spiritone', 'RBC',
-                       'td_eft1464', 'eft_canada'
+                       'td_eft1464', 'eft_canada', 'CIBC'
                      ]
   },
 
@@ -3757,6 +3819,13 @@ and customer address. Include units.',
     'key'         => 'batchconfig-BoM',
     'section'     => 'billing',
     'description' => 'Configuration for Bank of Montreal batching, seven lines: 1. Origin ID, 2. Datacenter, 3. Typecode, 4. Short name, 5. Long name, 6. Bank, 7. Bank account',
+    'type'        => 'textarea',
+  },
+
+{
+    'key'         => 'batchconfig-CIBC',
+    'section'     => 'billing',
+    'description' => 'Configuration for Canadian Imperial Bank of Commerce, six lines: 1. Origin ID, 2. Datacenter, 3. Typecode, 4. Short name, 5. Bank, 6. Bank account',
     'type'        => 'textarea',
   },
 
@@ -3798,7 +3867,7 @@ and customer address. Include units.',
   {
     'key'         => 'batchconfig-eft_canada',
     'section'     => 'billing',
-    'description' => 'Configuration for EFT Canada batching, four lines: 1. SFTP username, 2. SFTP password, 3. Transaction code, 4. Number of days to delay process date.  If you are using separate per-agent batches (batch-spoolagent), you must set this option separately for each agent, as the global setting will be ignored.',
+    'description' => 'Configuration for EFT Canada batching, five lines: 1. SFTP username, 2. SFTP password, 3. Business transaction code, 4. Personal transaction code, 5. Number of days to delay process date.  If you are using separate per-agent batches (batch-spoolagent), you must set this option separately for each agent, as the global setting will be ignored.',
     'type'        => 'textarea',
     'per_agent'   => 1,
   },
@@ -4040,13 +4109,6 @@ and customer address. Include units.',
     'description' => 'Self-service session timeout.  Defaults to 1 hour.',
     'type'        => 'select',
     'select_enum' => [ '1 hour', '2 hours', '4 hours', '8 hours', '1 day', '1 week', ],
-  },
-
-  {
-    'key'         => 'disable_setup_suspended_pkgs',
-    'section'     => 'billing',
-    'description' => 'Disables charging of setup fees for suspended packages.',
-    'type'        => 'checkbox',
   },
 
   {
@@ -4304,7 +4366,6 @@ and customer address. Include units.',
     'type'        => 'select',
     'select_hash' => [ '' => '', 
                        'usps'     => 'U.S. Postal Service',
-                       'ezlocate' => 'EZLocate',
                        'tomtom'   => 'TomTom',
                        'melissa'  => 'Melissa WebSmart',
                      ],
@@ -4327,22 +4388,8 @@ and customer address. Include units.',
   {
     'key'         => 'tomtom-userid',
     'section'     => 'UI',
-    'description' => 'TomTom geocoding service API key.  See <a href="http://www.tomtom.com/">the TomTom website</a> to obtain a key.  This is recommended for addresses in the United States only.',
+    'description' => 'TomTom geocoding service API key.  See <a href="http://geocoder.tomtom.com/">the TomTom website</a> to obtain a key.  This is recommended for addresses in the United States only.',
     'type'        => 'text',
-  },
-
-  {
-    'key'         => 'ezlocate-userid',
-    'section'     => 'UI',
-    'description' => 'User ID for EZ-Locate service.  See <a href="http://www.geocode.com/">the TomTom website</a> for access and pricing information.',
-    'type'        => 'text',
-  },
-
-  {
-    'key'         => 'ezlocate-password',
-    'section'     => 'UI',
-    'description' => 'Password for EZ-Locate service.',
-    'type'        => 'text'
   },
 
   {
@@ -4915,9 +4962,16 @@ and customer address. Include units.',
   },
 
   {
+    'key'         => 'svc_phone-bulk_provision_simple',
+    'section'     => 'telephony',
+    'description' => 'Bulk provision phone numbers with a simple number range instead of from DID vendor orders',
+    'type'        => 'checkbox',
+  },
+
+  {
     'key'         => 'default_phone_countrycode',
-    'section'     => '',
-    'description' => 'Default countrcode',
+    'section'     => 'telephony',
+    'description' => 'Default countrycode',
     'type'        => 'text',
   },
 
@@ -5127,16 +5181,27 @@ and customer address. Include units.',
 
   {
     'key'         => 'tax-cust_exempt-groups',
-    'section'     => '',
+    'section'     => 'billing',
     'description' => 'List of grouping possibilities for tax names, for per-customer exemption purposes, one tax name per line.  For example, "GST" would indicate the ability to exempt customers individually from taxes named "GST" (but not other taxes).',
     'type'        => 'textarea',
   },
 
   {
     'key'         => 'tax-cust_exempt-groups-require_individual_nums',
-    'section'     => '',
-    'description' => 'When using tax-cust_exempt-groups, require an individual tax exemption number for each exemption from different taxes.',
+    'section'     => 'deprecated',
+    'description' => 'Deprecated: see tax-cust_exempt-groups-number_requirement',
     'type'        => 'checkbox',
+  },
+
+  {
+    'key'         => 'tax-cust_exempt-groups-num_req',
+    'section'     => 'billing',
+    'description' => 'When using tax-cust_exempt-groups, control whether individual tax exemption numbers are required for exemption from different taxes.',
+    'type'        => 'select',
+    'select_hash' => [ ''            => 'Not required',
+                       'residential' => 'Required for residential customers only',
+                       'all'         => 'Required for all customers',
+                     ],
   },
 
   {
@@ -5783,6 +5848,13 @@ and customer address. Include units.',
                        'AU' => 'Australia',
                        'NZ' => 'New Zealand',
                      ],
+  },
+
+  {
+    'key'         => 'old_fcc_report',
+    'section'     => '',
+    'description' => 'Use the old (pre-2014) FCC Form 477 report format.',
+    'type'        => 'checkbox',
   },
 
   { key => "apacheroot", section => "deprecated", description => "<b>DEPRECATED</b>", type => "text" },

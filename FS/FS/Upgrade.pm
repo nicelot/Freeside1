@@ -97,6 +97,48 @@ sub upgrade_config {
     $conf->touch('cust_main-enable_spouse');
     $conf->delete('cust_main-enable_spouse_birthdate');
   }
+
+  # renamed/repurposed
+  if ( $conf->exists('cust_pkg-show_fcc_voice_grade_equivalent') ) {
+    $conf->touch('part_pkg-show_fcc_options');
+    $conf->delete('cust_pkg-show_fcc_voice_grade_equivalent');
+    warn "
+You have FCC Form 477 package options enabled.
+
+Starting with the October 2014 filing date, the FCC has redesigned 
+Form 477 and introduced new service categories.  See bin/convert-477-options
+to update your package configuration for the new report.
+
+If you need to continue using the old Form 477 report, turn on the
+'old_fcc_report' configuration option.
+";
+  }
+
+  # boolean invoice_sections_by_location option is now
+  # invoice_sections_method = 'location'
+  my @invoice_sections_confs =
+    qsearch('conf', { 'name' => { op=>'LIKE', value=>'%sections_by_location' } });
+  foreach my $c (@invoice_sections_confs) {
+    $c->name =~ /^(\w+)sections_by_location$/;
+    $conf->delete($c->name);
+    my $newname = $1.'sections_method';
+    $conf->set($newname, 'location');
+  }
+
+  # boolean enable_taxproducts is now enable_taxproducts = 'cch'
+  if ( $conf->exists('enable_taxproducts') and
+       $conf->config('enable_taxproducts') eq '' ) {
+
+    $conf->set('enable_taxproducts', 'cch');
+
+  }
+
+  # boolean tax-cust_exempt-groups-require_individual_nums is now -num_req all
+  if ( $conf->exists('tax-cust_exempt-groups-require_individual_nums') ) {
+    $conf->set('tax-cust_exempt-groups-num_req', 'all');
+    $conf->delete('tax-cust_exempt-groups-require_individual_nums');
+  }
+
 }
 
 sub upgrade_overlimit_groups {
@@ -200,7 +242,7 @@ sub upgrade {
   }
 
   local($FS::cust_main::ignore_expired_card) = 1;
-  local($FS::cust_main::ignore_illegal_zip) = 1;
+  #this is long-gone... would need to set an equivalent in cust_location #local($FS::cust_main::ignore_illegal_zip) = 1;
   local($FS::cust_main::ignore_banned_card) = 1;
   local($FS::cust_main::skip_fuzzyfiles) = 1;
 
@@ -343,6 +385,12 @@ sub upgrade_data {
 
     #fix taxable line item links
     'cust_bill_pkg_tax_location' => [],
+
+    #populate state FIPS codes if not already done
+    'state' => [],
+
+    #populate tax statuses
+    'tax_status' => [],
   ;
 
   \%hash;

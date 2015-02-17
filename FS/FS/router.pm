@@ -114,7 +114,7 @@ sub replace {
   my $error = $self->SUPER::replace($old, @_);
   return $error if $error;
 
-  if ( defined($self->blocknum) ) {
+  if ( length($self->blocknum) ) {
     #warn "FS::router::replace: blocknum = ".$self->blocknum."\n";
     # then release any blocks we're already holding
     foreach my $block ($self->addr_block) {
@@ -199,6 +199,13 @@ sub delete {
 
 Returns a list of FS::addr_block objects (address blocks) associated
 with this object.
+
+=cut
+
+sub addr_block {
+  my $self = shift;
+  qsearch('addr_block', { routernum => $self->routernum });
+}
 
 =item auto_addr_block
 

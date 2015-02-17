@@ -308,11 +308,12 @@ sub login {
 
 sub logout {
   my $p = shift;
+  my $skin_info = skin_info($p);
   if ( $p->{'session_id'} ) {
     _cache->remove($p->{'session_id'});
-    return { %{ skin_info($p) }, 'error' => '' };
+    return { %$skin_info, 'error' => '' };
   } else {
-    return { %{ skin_info($p) }, 'error' => "Can't resume session" }; #better error message
+    return { %$skin_info, 'error' => "Can't resume session" }; #better error message
   }
 }
 
@@ -398,6 +399,8 @@ sub access_info {
 
   $info->{'timeout'} = $conf->config('selfservice-timeout') || 3600;
 
+  $info->{'hide_usage'} = $conf->exists('selfservice_hide-usage');
+
   return { %$info,
            'custnum'       => $custnum,
            'access_pkgnum' => $session->{'pkgnum'},
@@ -462,8 +465,9 @@ sub customer_info {
                     );
 
     $return{has_ship_address} = $cust_main->has_ship_address;
-    $return{status} = $cust_main->status;
+    $return{status} = $cust_main->status_label; #$cust_main->status; #better to break anyone obscurely testing for strings in self-service than to have to upgrade every front-end to get the new status to display
     $return{statuscolor} = $cust_main->statuscolor;
+    $return{status_label} = $cust_main->status_label;
 
     # compatibility: some places in selfservice use this to determine
     # if there's a ship address
@@ -751,6 +755,8 @@ sub edit_info {
     $payby = $1;
   }
 
+  my $conf = new FS::Conf;
+
   if ( $payby =~ /^(CARD|DCRD)$/ ) {
 
     $new->paydate($p->{'year'}. '-'. $p->{'month'}. '-01');
@@ -762,6 +768,10 @@ sub edit_info {
     }
 
     $new->set( 'payby' => $p->{'auto'} ? 'CARD' : 'DCRD' );
+
+    if ( $conf->exists('selfservice-onfile_require_cvv') ){
+      return { 'error' => 'CVV2 is required' } unless $p->{'paycvv'};
+    }
 
   } elsif ( $payby =~ /^(CHEK|DCHK)$/ ) {
 
@@ -839,8 +849,9 @@ sub payment_info {
 
       'card_types' => card_types(),
 
-      'withcvv'     => $conf->exists('selfservice-require_cvv'), #or enable optional cvv?
-      'require_cvv' => $conf->exists('selfservice-require_cvv'),
+      'withcvv'            => $conf->exists('selfservice-require_cvv'), #or enable optional cvv?
+      'require_cvv'        => $conf->exists('selfservice-require_cvv'),
+      'onfile_require_cvv' => $conf->exists('selfservice-onfile_require_cvv'),
 
       'paytypes' => [ @FS::cust_main::paytypes ],
 
@@ -914,7 +925,8 @@ sub payment_info {
 
   #doubleclick protection
   my $_date = time;
-  $return{paybatch} = "webui-MyAccount-$_date-$$-". rand() * 2**32;
+  $return{payunique} = "webui-MyAccount-$_date-$$-". rand() * 2**32; #new
+  $return{paybatch} = $return{payunique};  #back compat
 
   return { 'error' => '',
            %return,
@@ -964,9 +976,15 @@ sub validate_payment {
     or return { 'error' => gettext('illegal_name'). " payname: ". $p->{'payname'} };
   my $payname = $1;
 
+  $p->{'payunique'} =~ /^([\w \!\@\#\$\%\&\(\)\-\+\;\:\'\"\,\.\?\/\=]*)$/
+    or return { 'error' => gettext('illegal_text'). " payunique: ". $p->{'payunique'} };
+  my $payunique = $1;
+
   $p->{'paybatch'} =~ /^([\w \!\@\#\$\%\&\(\)\-\+\;\:\'\"\,\.\?\/\=]*)$/
     or return { 'error' => gettext('illegal_text'). " paybatch: ". $p->{'paybatch'} };
   my $paybatch = $1;
+
+  $payunique = $paybatch if ! length($payunique) && length($paybatch);
 
   $p->{'payby'} ||= 'CARD';
   $p->{'payby'} =~ /^([A-Z]{4})$/
@@ -1022,6 +1040,8 @@ sub validate_payment {
           or return { 'error' => "CVV2 (CVC2/CID) is three digits." };
         $paycvv = $1;
       }
+    } elsif ( $conf->exists('selfservice-onfile_require_cvv') ) {
+      return { 'error' => 'CVV2 is required' };
     } elsif ( !$onfile && $conf->exists('selfservice-require_cvv') ) {
       return { 'error' => 'CVV2 is required' };
     }
@@ -1051,7 +1071,8 @@ sub validate_payment {
     'month'          => $p->{'month'},
     'year'           => $p->{'year'},
     'payname'        => $payname,
-    'paybatch'       => $paybatch, #this doesn't actually do anything
+    'payunique'      => $payunique,
+    'paybatch'       => $paybatch,
     'paycvv'         => $paycvv,
     'payname'        => $payname,
     'discount_term'  => $discount_term,
@@ -1225,16 +1246,14 @@ sub do_process_payment {
 
   if ( $cust_pay ) {
 
-    my($gw, $auth, $order) = split(':', $cust_pay->paybatch);
-
     return {
       'error'        => '',
       'amount'       => sprintf('%.2f', $cust_pay->paid),
       'date'         => $cust_pay->_date,
       'date_pretty'  => time2str('%Y-%m-%d', $cust_pay->_date),
       'time_pretty'  => time2str('%T', $cust_pay->_date),
-      'auth_num'     => $auth,
-      'order_num'    => $order,
+      'auth_num'     => $cust_pay->auth,
+      'order_num'    => $cust_pay->order_number,
       'receipt_html' => $receipt_html,
     };
 
@@ -1602,6 +1621,7 @@ sub list_pkgs {
     or return { 'error' => "unknown custnum $custnum" };
 
   my $conf = new FS::Conf;
+  my $immutable = $conf->exists('selfservice_immutable-package');
   
 # the duplication below is necessary:
 # 1. to maintain the current buggy behaviour wrt the cust_pkg and part_pkg
@@ -1614,6 +1634,7 @@ sub list_pkgs {
 	    'custnum'  => $custnum,
 	    'cust_pkg' => [ map {
                           { $_->hash,
+			    immutable => $immutable,
                             part_pkg => [ map $_->hashref, $_->part_pkg ],
                             part_svc =>
                               [ map $_->hashref, $_->available_part_svc ],
@@ -1646,6 +1667,7 @@ sub list_pkgs {
                           my $primary_cust_svc = $_->primary_cust_svc;
                           +{ $_->hash,
                             $_->part_pkg->hash,
+			    immutable   => $immutable,
                             pkg_label   => $_->pkg_locale,
                             status      => $_->status,
                             statuscolor => $_->statuscolor,
@@ -1695,6 +1717,9 @@ sub list_svcs {
   my($context, $session, $custnum) = _custoragent_session_custnum($p);
   return { 'error' => $session } if $context eq 'error';
 
+  my $conf = new FS::Conf;
+
+  my $hide_usage = $conf->exists('selfservice_hide-usage') ? 1 : 0;
   my $search = { 'custnum' => $custnum };
   $search->{'agentnum'} = $session->{'agentnum'} if $context eq 'agent';
   my $cust_main = qsearchs('cust_main', $search )
@@ -1708,7 +1733,6 @@ sub list_svcs {
 
   my @cust_svc = ();
   my @cust_pkg_usage = ();
-  #foreach my $cust_pkg ( $cust_main->ncancelled_pkgs ) {
   foreach my $cust_pkg ( $p->{'ncancelled'} 
                          ? $cust_main->ncancelled_pkgs
                          : $cust_main->unsuspended_pkgs ) {
@@ -1719,14 +1743,16 @@ sub list_svcs {
 
   @cust_svc = grep { $_->part_svc->selfservice_access ne 'hidden' } @cust_svc;
   my %usage_pools;
-  foreach (@cust_pkg_usage) {
-    my $part = $_->part_pkg_usage;
-    my $tag = $part->description . ($part->shared ? 1 : 0);
-    my $row = $usage_pools{$tag} 
-          ||= [ $part->description, 0, 0, $part->shared ? 1 : 0 ];
-    $row->[1] += sprintf('%.1f', $_->minutes); # minutes remaining
-    $row->[2] += $part->minutes; # minutes total
-  }
+  if (!$hide_usage) {
+    foreach (@cust_pkg_usage) {
+      my $part = $_->part_pkg_usage;
+      my $tag = $part->description . ($part->shared ? 1 : 0);
+      my $row = $usage_pools{$tag} 
+            ||= [ $part->description, 0, 0, $part->shared ? 1 : 0 ];
+      $row->[1] += sprintf('%.1f', $_->minutes); # minutes remaining
+      $row->[2] += $part->minutes; # minutes total
+    }
+  } # otherwise just leave them empty
 
   if ( $p->{'svcdb'} ) {
     my $svcdb = ref($p->{'svcdb'}) eq 'HASH'
@@ -1740,108 +1766,110 @@ sub list_svcs {
   #@svc_x = sort { $a->domain cmp $b->domain || $a->username cmp $b->username }
   #              @svc_x;
 
-    my $conf = new FS::Conf;
+  my @svcs; # stuff to return to the client
+  foreach my $cust_svc (@cust_svc) {
+    my $svc_x = $cust_svc->svc_x;
+    my($label, $value) = $cust_svc->label;
+    my $part_svc = $cust_svc->part_svc;
+    my $svcdb = $part_svc->svcdb;
+    my $cust_pkg = $cust_svc->cust_pkg;
+    my $part_pkg = $cust_pkg->part_pkg;
 
-  { 
+    my %hash = (
+      'svcnum'         => $cust_svc->svcnum,
+      'display_svcnum' => $cust_svc->display_svcnum,
+      'svcdb'          => $svcdb,
+      'label'          => $label,
+      'value'          => $value,
+      'pkg_label'      => $cust_pkg->pkg_locale,
+      'pkg_status'     => $cust_pkg->status,
+      'readonly'       => ($part_svc->selfservice_access eq 'readonly'),
+    );
+
+    # would it make sense to put this in a svc_* method?
+
+    if ( $svcdb eq 'svc_acct' ) {
+      foreach (qw(username email finger seconds)) {
+        $hash{$_} = $svc_x->$_;
+      }
+
+      if (!$hide_usage) {
+        %hash = (
+          %hash,
+          'upbytes'    => display_bytecount($svc_x->upbytes),
+          'downbytes'  => display_bytecount($svc_x->downbytes),
+          'totalbytes' => display_bytecount($svc_x->totalbytes),
+
+          'recharge_amount'  => $part_pkg->option('recharge_amount',1),
+          'recharge_seconds' => $part_pkg->option('recharge_seconds',1),
+          'recharge_upbytes'    =>
+            display_bytecount($part_pkg->option('recharge_upbytes',1)),
+          'recharge_downbytes'  =>
+            display_bytecount($part_pkg->option('recharge_downbytes',1)),
+          'recharge_totalbytes' =>
+            display_bytecount($part_pkg->option('recharge_totalbytes',1)),
+          # more...
+        );
+      }
+
+    } elsif ( $svcdb eq 'svc_dsl' ) {
+
+      $hash{'phonenum'} = $svc_x->phonenum;
+      if ( $svc_x->first || $svc_x->get('last') || $svc_x->company ) {
+        $hash{'name'} = $svc_x->first. ' '. $svc_x->get('last');
+        $hash{'name'} = $svc_x->company. ' ('. $hash{'name'}. ')'
+          if $svc_x->company;
+      } else {
+        $hash{'name'} = $cust_main->name;
+      }
+      # no usage to hide here
+
+    } elsif ( $svcdb eq 'svc_phone' ) {
+      if (!$hide_usage) {
+        # could potentially show lots of things...
+        $hash{'outbound'} = 1;
+        $hash{'inbound'}  = 0;
+        if ( $part_pkg->plan eq 'voip_inbound' ) {
+          $hash{'outbound'} = 0;
+          $hash{'inbound'}  = 1;
+        } elsif ( $part_pkg->option('selfservice_inbound_format')
+              or  $conf->config('selfservice-default_inbound_cdr_format')
+        ) {
+          $hash{'inbound'}  = 1;
+        }
+        foreach (qw(inbound outbound)) {
+          # hmm...we can't filter by status here, because there might
+          # not be cdr_terminations at all.  have to go by date.
+          # find all since the last bill date.
+          # XXX cdr types?  we are going to need them.
+          if ( $hash{$_} ) {
+            my $sum_cdr = $svc_x->sum_cdrs(
+              'inbound' => ( $_ eq 'inbound' ? 1 : 0 ),
+              'begin'   => ($cust_pkg->last_bill || 0),
+              'nonzero' => 1,
+              'disable_charged_party' => 1,
+            );
+            $hash{$_} = $sum_cdr->hashref;
+          }
+        }
+      } # not hiding usage
+    } # svcdb
+
+    push @svcs, \%hash;
+  } # foreach $cust_svc
+
+  return { 
     'svcnum'   => $session->{'svcnum'},
     'custnum'  => $custnum,
     'date_format' => $conf->config('date_format') || '%m/%d/%Y',
     'view_usage_nodomain' => $conf->exists('selfservice-view_usage_nodomain'),
-    'svcs'     => [
-      map { 
-            my $svc_x = $_->svc_x;
-            my($label, $value) = $_->label;
-            my $part_svc = $_->part_svc;
-            my $svcdb = $part_svc->svcdb;
-            my $cust_pkg = $_->cust_pkg;
-            my $part_pkg = $cust_pkg->part_pkg;
-
-            my %hash = (
-              'svcnum'         => $_->svcnum,
-              'display_svcnum' => $_->display_svcnum,
-              'svcdb'          => $svcdb,
-              'label'          => $label,
-              'value'          => $value,
-              'pkg_label'      => $cust_pkg->pkg_locale,
-              'pkg_status'     => $cust_pkg->status,
-              'readonly'       => ($part_svc->selfservice_access eq 'readonly'),
-            );
-
-            if ( $svcdb eq 'svc_acct' ) {
-              %hash = (
-                %hash,
-                'username'   => $svc_x->username,
-                'email'      => $svc_x->email,
-                'finger'     => $svc_x->finger,
-                'seconds'    => $svc_x->seconds,
-                'upbytes'    => display_bytecount($svc_x->upbytes),
-                'downbytes'  => display_bytecount($svc_x->downbytes),
-                'totalbytes' => display_bytecount($svc_x->totalbytes),
-
-                'recharge_amount'  => $part_pkg->option('recharge_amount',1),
-                'recharge_seconds' => $part_pkg->option('recharge_seconds',1),
-                'recharge_upbytes'    =>
-                  display_bytecount($part_pkg->option('recharge_upbytes',1)),
-                'recharge_downbytes'  =>
-                  display_bytecount($part_pkg->option('recharge_downbytes',1)),
-                'recharge_totalbytes' =>
-                  display_bytecount($part_pkg->option('recharge_totalbytes',1)),
-                # more...
-              );
-
-            } elsif ( $svcdb eq 'svc_dsl' ) {
-              $hash{'phonenum'} = $svc_x->phonenum;
-              if ( $svc_x->first || $svc_x->get('last') || $svc_x->company ) {
-                $hash{'name'} = $svc_x->first. ' '. $svc_x->get('last');
-                $hash{'name'} = $svc_x->company. ' ('. $hash{'name'}. ')'
-                  if $svc_x->company;
-              } else {
-                $hash{'name'} = $cust_main->name;
-              }
-            } elsif ( $svcdb eq 'svc_phone' ) {
-              # could potentially show lots of things...
-              $hash{'outbound'} = 1;
-              $hash{'inbound'}  = 0;
-              if ( $part_pkg->plan eq 'voip_inbound' ) {
-                $hash{'outbound'} = 0;
-                $hash{'inbound'}  = 1;
-              } elsif ( $part_pkg->option('selfservice_inbound_format')
-                    or  $conf->config('selfservice-default_inbound_cdr_format')
-              ) {
-                $hash{'inbound'}  = 1;
-              }
-              foreach (qw(inbound outbound)) {
-                # hmm...we can't filter by status here, because there might
-                # not be cdr_terminations at all.  have to go by date.
-                # find all since the last bill date.
-                # XXX cdr types?  we are going to need them.
-                if ( $hash{$_} ) {
-                  my $sum_cdr = $svc_x->sum_cdrs(
-                    'inbound' => ( $_ eq 'inbound' ? 1 : 0 ),
-                    'begin'   => ($cust_pkg->last_bill || 0),
-                    'nonzero' => 1,
-                    'disable_charged_party' => 1,
-                  );
-                  $hash{$_} = $sum_cdr->hashref;
-                }
-              }
-            }
-
-            # elsif ( $svcdb eq 'svc_phone' || $svcdb eq 'svc_port' ) {
-            #  %hash = (
-            #    %hash,
-            #  );
-            #}
-
-            \%hash;
-          }
-          @cust_svc
-    ],
+    'svcs'     => \@svcs,
     'usage_pools' => [
       map { $usage_pools{$_} }
       sort { $a cmp $b }
       keys %usage_pools
     ],
+    'hide_usage' => $hide_usage,
   };
 
 }
@@ -2123,6 +2151,10 @@ sub _usage_details {
   my($callback, $p, %opt) = @_;
   my $conf = FS::Conf->new;
 
+  if ( $conf->exists('selfservice_hide-usage') ) {
+    return { 'error' => 'Viewing usage is not allowed.' };
+  }
+
   my($context, $session, $custnum) = _custoragent_session_custnum($p);
   return { 'error' => $session } if $context eq 'error';
 
@@ -2338,6 +2370,10 @@ sub change_pkg {
   my($context, $session, $custnum) = _custoragent_session_custnum($p);
   return { 'error' => $session } if $context eq 'error';
 
+  my $conf = new FS::Conf;
+  my $immutable = $conf->exists('selfservice_immutable-package');
+  return { 'error' => "Package modification disabled" } if $immutable;
+
   my $search = { 'custnum' => $custnum };
   $search->{'agentnum'} = $session->{'agentnum'} if $context eq 'agent';
   my $cust_main = qsearchs('cust_main', $search )
@@ -2359,7 +2395,6 @@ sub change_pkg {
                                    \@newpkg,
                                  );
 
-  my $conf = new FS::Conf;
   if ( $conf->exists('signup_server-realtime') ) {
 
     my $bill_error = _do_bop_realtime( $cust_main, $status, 'no_credit'=>1 );

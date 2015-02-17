@@ -448,6 +448,7 @@
 %   my @exempt_groups = grep /\S/, $conf->config('tax-cust_exempt-groups');
 %   if (    $conf->exists('cust_class-tax_exempt')
 %        || $conf->exists('tax-cust_exempt-groups-require_individual_nums')
+%        || $conf->config('tax-cust_exempt-groups-num_req') =~ /\w/
 %        || ! $curuser->access_right('Edit customer tax exemptions')
 %      )
 %   {
@@ -546,7 +547,8 @@
       <TD ALIGN="right" WIDTH="200"><% mt('Invoice terms') |h %> </TD>
       <TD WIDTH="408">
         <& /elements/select-terms.html,
-                     'curr_value' => $cust_main->invoice_terms,
+             'curr_value' => $cust_main->invoice_terms,
+             'agentnum'   => $cust_main->agentnum,
         &>
       </TD>
     </TR>

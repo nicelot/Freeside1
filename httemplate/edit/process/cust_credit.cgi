@@ -1,5 +1,4 @@
 %if ( $error ) {
-%  $cgi->param('reasonnum', $reasonnum);
 %  $cgi->param('error', $error);
 %  $dbh->rollback if $oldAutoCommit;
 %  
@@ -37,25 +36,26 @@ my $oldAutoCommit = $FS::UID::AutoCommit;
 local $FS::UID::AutoCommit = 0;
 my $dbh = dbh;
 
-my $error = '';
-if ($reasonnum == -1) {
-
-  $error = 'Enter a new reason (or select an existing one)'
-    unless $cgi->param('newreasonnum') !~ /^\s*$/;
-  my $reason = new FS::reason {
-                 'reason_type' => scalar($cgi->param('newreasonnumT')),
-                 'reason'      => scalar($cgi->param('newreasonnum')),
-               };
-  $error ||= $reason->insert;
-  $cgi->param('reasonnum', $reason->reasonnum)
-    unless $error;
+my ($reasonnum, $error) = $m->comp('/misc/process/elements/reason');
+if (!$reasonnum) {
+  $error ||= 'Reason required'
 }
+$cgi->param('reasonnum', $reasonnum) unless $error;
+
+my $_date;
+if ( $FS::CurrentUser::CurrentUser->access_right('Backdate credit') ) {
+  $_date = parse_datetime($cgi->param('_date'));
+}
+else {
+  $_date = time;
+}
+
+my @fields = grep { $_ ne '_date' } fields('cust_credit');
 
 unless ($error) {
   my $new = new FS::cust_credit ( {
-    map {
-      $_, scalar($cgi->param($_));
-    } fields('cust_credit')
+    _date  => $_date,
+    map { $_ => scalar($cgi->param($_)) } @fields
   } );
   $error = $new->insert;
 }

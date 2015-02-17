@@ -83,6 +83,7 @@ if ( -e $addl_handler_use_file ) {
   use IO::File;
   use IO::Scalar;
   use IO::String;
+  use File::Slurp qw( slurp );
   #not actually using this yet anyway...# use IPC::Run3 0.036;
   use Net::Whois::Raw qw(whois);
   if ( $] < 5.006 ) {
@@ -383,6 +384,18 @@ if ( -e $addl_handler_use_file ) {
   use FS::export_batch;
   use FS::export_batch_item;
   use FS::part_pkg_fcc_option;
+  use FS::state;
+  use FS::state;
+  use FS::queue_stat;
+  use FS::deploy_zone;
+  use FS::deploy_zone_block;
+  use FS::deploy_zone_vertex;
+  use FS::TaxEngine;
+  use FS::tax_status;
+  use FS::circuit_type;
+  use FS::circuit_provider;
+  use FS::circuit_termination;
+  use FS::svc_circuit;
   # Sammath Naur
 
   if ( $FS::Mason::addl_handler_use ) {
