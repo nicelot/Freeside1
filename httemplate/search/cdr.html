@@ -258,6 +258,23 @@ if ( $cgi->param('acctid') =~ /\d/ ) {
 }
 
 ###
+# accountcode
+###
+
+if ( $cgi->param('accountcode') =~ /\S/ ) {
+  my $accountcode = $cgi->param('accountcode');
+  my @accountcode = map {
+    ( my $v = $_ ) =~ s/^\s+|\s+$//g;    # trim margin whitespace
+    length $v ? dbh->quote($v) : ()
+  } grep /\S/, split /\R/, $accountcode;    # collect non-trivial lines
+  if (@accountcode) {
+    my $search = 'accountcode IN ( ' . join( ',', @accountcode ) . ' )';
+    push @qsearch, $search;
+    push @search,  $search;
+  }
+}
+
+###
 # finish it up
 ###
 

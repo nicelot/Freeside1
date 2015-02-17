@@ -472,6 +472,8 @@ L<FS::queue_arg> - Job arguments
 
 L<FS::queue_depend> - Job dependencies
 
+L<FS::queue_stat> - Job statistics
+
 L<FS::msg_template> - Message templates (customer notices)
 
 L<FS::msgcat> - Message catalogs (error messages)
@@ -614,6 +616,8 @@ Commercial products and services are available; see
 
 Jeremy Davis
 
+Jason Hall
+
 Ivan Kohler
 
 Mark Wells
@@ -623,8 +627,6 @@ Mark Wells
 Peter Bowen
 
 Jeff Finucane
-
-Jason Hall
 
 Kristian Hoffman
 

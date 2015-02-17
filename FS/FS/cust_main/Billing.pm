@@ -106,8 +106,9 @@ options of those methods are also available.
 sub bill_and_collect {
   my( $self, %options ) = @_;
 
-  my $log = FS::Log->new('bill_and_collect');
-  $log->debug('start', object => $self, agentnum => $self->agentnum);
+  my $log = FS::Log->new('FS::cust_main::Billing::bill_and_collect');
+  my %logopt = (object => $self);
+  $log->debug('start', %logopt);
 
   my $error;
 
@@ -123,6 +124,7 @@ sub bill_and_collect {
                     );
 
   $job->update_statustext('0,cleaning expired packages') if $job;
+  $log->debug('canceling expired packages', %logopt);
   $error = $self->cancel_expired_pkgs( $actual_time );
   if ( $error ) {
     $error = "Error expiring custnum ". $self->custnum. ": $error";
@@ -131,6 +133,7 @@ sub bill_and_collect {
     else                                                     { warn   $error; }
   }
 
+  $log->debug('suspending adjourned packages', %logopt);
   $error = $self->suspend_adjourned_pkgs( $actual_time );
   if ( $error ) {
     $error = "Error adjourning custnum ". $self->custnum. ": $error";
@@ -139,6 +142,7 @@ sub bill_and_collect {
     else                                                     { warn   $error; }
   }
 
+  $log->debug('unsuspending resumed packages', %logopt);
   $error = $self->unsuspend_resumed_pkgs( $actual_time );
   if ( $error ) {
     $error = "Error resuming custnum ".$self->custnum. ": $error";
@@ -148,6 +152,7 @@ sub bill_and_collect {
   }
 
   $job->update_statustext('20,billing packages') if $job;
+  $log->debug('billing packages', %logopt);
   $error = $self->bill( %options );
   if ( $error ) {
     $error = "Error billing custnum ". $self->custnum. ": $error";
@@ -157,6 +162,7 @@ sub bill_and_collect {
   }
 
   $job->update_statustext('50,applying payments and credits') if $job;
+  $log->debug('applying payments and credits', %logopt);
   $error = $self->apply_payments_and_credits;
   if ( $error ) {
     $error = "Error applying custnum ". $self->custnum. ": $error";
@@ -165,10 +171,11 @@ sub bill_and_collect {
     else                                                     { warn   $error; }
   }
 
-  $job->update_statustext('70,running collection events') if $job;
   unless ( $conf->exists('cancelled_cust-noevents')
            && ! $self->num_ncancelled_pkgs
   ) {
+    $job->update_statustext('70,running collection events') if $job;
+    $log->debug('running collection events', %logopt);
     $error = $self->collect( %options );
     if ( $error ) {
       $error = "Error collecting custnum ". $self->custnum. ": $error";
@@ -177,8 +184,9 @@ sub bill_and_collect {
       else                                                   { warn   $error; }
     }
   }
+
   $job->update_statustext('100,finished') if $job;
-  $log->debug('finish', object => $self, agentnum => $self->agentnum);
+  $log->debug('finish', %logopt);
 
   '';
 
@@ -371,7 +379,10 @@ sub bill {
   return '' if $self->payby eq 'COMP';
 
   local($DEBUG) = $FS::cust_main::DEBUG if $FS::cust_main::DEBUG > $DEBUG;
+  my $log = FS::Log->new('FS::cust_main::Billing::bill');
+  my %logopt = (object => $self);
 
+  $log->debug('start', %logopt);
   warn "$me bill customer ". $self->custnum. "\n"
     if $DEBUG;
 
@@ -400,11 +411,13 @@ sub bill {
   local $FS::UID::AutoCommit = 0;
   my $dbh = dbh;
 
+  $log->debug('acquiring lock', %logopt);
   warn "$me acquiring lock on customer ". $self->custnum. "\n"
     if $DEBUG;
 
   $self->select_for_update; #mutex
 
+  $log->debug('running pre-bill events', %logopt);
   warn "$me running pre-bill events for customer ". $self->custnum. "\n"
     if $DEBUG;
 
@@ -420,6 +433,7 @@ sub bill {
     return $error;
   }
 
+  $log->debug('done running pre-bill events', %logopt);
   warn "$me done running pre-bill events for customer ". $self->custnum. "\n"
     if $DEBUG;
 
@@ -450,6 +464,7 @@ sub bill {
 
     next if $options{'no_prepaid'} && $part_pkg->is_prepaid;
 
+    $log->debug('bill package '. $cust_pkg->pkgnum, %logopt);
     warn "  bill package ". $cust_pkg->pkgnum. "\n" if $DEBUG;
 
     #? to avoid use of uninitialized value errors... ?
@@ -730,15 +745,18 @@ sub bill {
 
     my $charged = sprintf('%.2f', ${ $total_setup{$pass} } + ${ $total_recur{$pass} } );
 
-    my @cust_bill = $self->cust_bill;
     my $balance = $self->balance;
-    my $previous_bill = $cust_bill[-1] if @cust_bill;
-    my $previous_balance = 0;
-    if ( $previous_bill ) {
-      $previous_balance = $previous_bill->billing_balance 
-                        + $previous_bill->charged;
-    }
 
+    my $previous_bill = qsearchs({ 'table'     => 'cust_bill',
+                                   'hashref'   => { custnum=>$self->custnum },
+                                   'extra_sql' => 'ORDER BY _date DESC LIMIT 1',
+                                });
+    my $previous_balance =
+      $previous_bill
+        ? ( $previous_bill->billing_balance + $previous_bill->charged )
+        : 0;
+
+    $log->debug('creating the new invoice', %logopt);
     warn "creating the new invoice\n" if $DEBUG;
     #create the new invoice
     my $cust_bill = new FS::cust_bill ( {
@@ -1072,6 +1090,16 @@ sub _make_lines {
   my %setup_param = ( 'discounts' => \@setup_discounts );
   my $setup_billed_currency = '';
   my $setup_billed_amount = 0;
+  # Conditions for setting setup date and charging the setup fee:
+  # - this is not a recurring-only billing run
+  # - and the package is not currently being canceled
+  # - and, unless we're specifically told otherwise via 'resetup':
+  #   - it doesn't already HAVE a setup date
+  #   - or a start date in the future
+  #   - and it's not suspended
+  #
+  # The last condition used to check the "disable_setup_suspended" option but 
+  # that's obsolete. We now never set the setup date on a suspended package.
   if (     ! $options{recurring_only}
        and ! $options{cancel}
        and ( $options{'resetup'}
@@ -1079,11 +1107,7 @@ sub _make_lines {
                   && ( ! $cust_pkg->start_date
                        || $cust_pkg->start_date <= $cmp_time
                      )
-                  && ( ! $conf->exists('disable_setup_suspended_pkgs')
-                       || ( $conf->exists('disable_setup_suspended_pkgs') &&
-                            ! $cust_pkg->getfield('susp')
-                          )
-                     )
+                  && ( ! $cust_pkg->getfield('susp') )
                 )
            )
      )
@@ -2426,13 +2450,9 @@ sub apply_payments {
 
   #return 0 unless
 
-  my @payments = sort { $b->_date <=> $a->_date }
-                 grep { $_->unapplied > 0 }
-                 $self->cust_pay;
+  my @payments = $self->unapplied_cust_pay;
 
-  my @invoices = sort { $a->_date <=> $b->_date}
-                 grep { $_->owed > 0 }
-                 $self->cust_bill;
+  my @invoices = $self->open_cust_bill;
 
   if ( $conf->exists('pkg-balances') ) {
     # limit @payments to those w/ a pkgnum grepped from $self

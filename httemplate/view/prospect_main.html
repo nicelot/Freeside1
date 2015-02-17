@@ -1,7 +1,4 @@
-<% include('/elements/header.html',
-             'Prospect View: '. $prospect_main->company
-          )
-%>
+<& /elements/header.html, 'Prospect View: '. $prospect_main->company &>
 
 % if ( $curuser->access_right('Edit prospect') ) { 
   <A HREF="<% $p %>edit/prospect_main.html?<% $prospectnum %>">Edit this prospect</A>
@@ -11,7 +8,11 @@
 
 <TR>
   <TD ALIGN="right">Prospect #</TD>
-  <TD BGCOLOR="#FFFFFF"><B><% $prospectnum %></B></TD>
+  <TD BGCOLOR="#FFFFFF"><B><% $prospectnum %></B>
+%   if ( $prospect_main->disabled ) {
+      <B>(DISABLED)</B>
+%   }
+  </TD>
 </TR>
 
 %unless ( scalar(@agentnums) == 1
@@ -19,7 +20,15 @@
 %  my $agent = qsearchs('agent',{ 'agentnum' => $prospect_main->agentnum } );
    <TR>
      <TD ALIGN="right">Agent</TD>
-     <TD BGCOLOR="#ffffff"><% $agent->agentnum %>: <% $agent->agent %></TD>
+     <TD BGCOLOR="#ffffff"><% $agent->agentnum %>: <% $agent->agent |h %></TD>
+   </TR>
+%}
+
+%unless ( ! $prospect_main->refnum ) { # || scalar(@part_referral) == 1 ) {
+%  my $part_referral = qsearchs('part_referral',{ 'refnum' => $prospect_main->refnum } );
+   <TR>
+     <TD ALIGN="right">Advertising source</TD>
+     <TD BGCOLOR="#ffffff"><% $part_referral->referral |h %></TD>
    </TR>
 %}
 
@@ -64,37 +73,7 @@
 
 <BR>
 
-% if ( $curuser->access_right('Generate quotation') ) { 
-  <FONT CLASS="fsinnerbox-title"><% mt( 'Quotations' ) |h %></FONT>
-  <A HREF="<%$p%>edit/quotation.html?prospectnum=<% $prospectnum %>">New quotation</A>
-% my @quotations = $prospect_main->quotation;
-% if ( @quotations ) {
-    <& /elements/table-grid.html &>
-%     my $bgcolor1 = '#eeeeee';
-%     my $bgcolor2 = '#ffffff';
-%     my $bgcolor = '';
-      <TR>
-        <TH CLASS="grid" BGCOLOR="#cccccc">#</TH>
-        <TH CLASS="grid" BGCOLOR="#cccccc"><% mt('Date') |h %></TH>
-      </TR>
-%     foreach my $quotation (@quotations) {
-%       if ( $bgcolor eq $bgcolor1 ) {
-%         $bgcolor = $bgcolor2;
-%       } else {
-%         $bgcolor = $bgcolor1;
-%       }
-%       my $a = qq(<A HREF="$p/view/quotation.html?quotationnum=). #"
-%               $quotation->quotationnum. '">';
-        <TR>
-          <TD CLASS="grid" BGCOLOR="<% $bgcolor %>"><% $a %><% $quotation->quotationnum %></A></TD>
-          <TD CLASS="grid" BGCOLOR="<% $bgcolor %>"><% $a %><% time2str($date_format, $quotation->_date) |h %></A></TD>
-        </TR>
-%     }
-    </TABLE>
-% }
-    <BR><BR>
-% }
-
+<& /elements/quotations.html, prospect_main=>$prospect_main &>
 
 % if ( $curuser->access_right('Qualify service') ) { 
 <% include( '/elements/popup_link-prospect_main.html',
@@ -128,10 +107,6 @@ my $curuser = $FS::CurrentUser::CurrentUser;
 
 die "access denied"
   unless $curuser->access_right('View prospect');
-
-my $conf = new FS::Conf;
-
-my $date_format = $conf->config('date_format') || '%m/%d/%Y';
 
 my $prospectnum;
 if ( $cgi->param('prospectnum') =~ /^(\d+)$/ ) {

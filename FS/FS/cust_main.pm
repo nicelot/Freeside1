@@ -414,14 +414,9 @@ sub insert {
 
   # insert locations
   foreach my $l (qw(bill_location ship_location)) {
-    my $loc = delete $self->hashref->{$l};
-    # XXX if we're moving a prospect's locations, do that here
-    if ( !$loc ) {
-      #return "$l not set";
-      #location-less customer records are now permitted
-      next;
-    }
-    
+
+    my $loc = delete $self->hashref->{$l} or next;
+
     if ( !$loc->locationnum ) {
       # warn the location that we're going to insert it with no custnum
       $loc->set(custnum_pending => 1);
@@ -433,8 +428,19 @@ sub insert {
         my $label = $l eq 'ship_location' ? 'service' : 'billing';
         return "$error (in $label location)";
       }
-    }
-    elsif ( ($loc->custnum || 0) > 0 or $loc->prospectnum ) {
+
+    } elsif ( $loc->prospectnum ) {
+
+      $loc->prospectnum('');
+      $loc->set(custnum_pending => 1);
+      my $error = $loc->replace;
+      if ( $error ) {
+        $dbh->rollback if $oldAutoCommit;
+        my $label = $l eq 'ship_location' ? 'service' : 'billing';
+        return "$error (moving $label location)";
+      }
+
+    } elsif ( ($loc->custnum || 0) > 0 ) {
       # then it somehow belongs to another customer--shouldn't happen
       $dbh->rollback if $oldAutoCommit;
       return "$l belongs to customer ".$loc->custnum;
@@ -2165,14 +2171,27 @@ sub cust_payby {
 =item unsuspend
 
 Unsuspends all unflagged suspended packages (see L</unflagged_suspended_pkgs>
-and L<FS::cust_pkg>) for this customer.  Always returns a list: an empty list
-on success or a list of errors.
+and L<FS::cust_pkg>) for this customer, except those on hold.
+
+Returns a list: an empty list on success or a list of errors.
 
 =cut
 
 sub unsuspend {
   my $self = shift;
-  grep { $_->unsuspend } $self->suspended_pkgs;
+  grep { ($_->get('setup')) && $_->unsuspend } $self->suspended_pkgs;
+}
+
+=item release_hold
+
+Unsuspends all suspended packages in the on-hold state (those without setup 
+dates) for this customer. 
+
+=cut
+
+sub release_hold {
+  my $self = shift;
+  grep { (!$_->setup) && $_->unsuspend } $self->suspended_pkgs;
 }
 
 =item suspend
@@ -2838,13 +2857,19 @@ UNIX timestamps; see L<perlfunc/"time">).  Also see L<Time::Local> and
 L<Date::Parse> for conversion functions.  The empty string can be passed
 to disable that time constraint completely.
 
-Available options are:
+Accepts the same options as L<balance_date_sql>:
 
 =over 4
 
 =item unapplied_date
 
 set to true to disregard unapplied credits, payments and refunds outside the specified time period - by default the time period restriction only applies to invoices (useful for reporting, probably a bad idea for event triggering)
+
+=item cutoff
+
+An absolute cutoff time.  Payments, credits, and refunds I<applied> after this 
+time will be ignored.  Note that START_TIME and END_TIME only limit the date 
+range for invoices and I<unapplied> payments, credits, and refunds.
 
 =back
 
@@ -3771,9 +3796,17 @@ Returns all the payments (see L<FS::cust_pay>) for this customer.
 
 sub cust_pay {
   my $self = shift;
-  return $self->num_cust_pay unless wantarray;
-  sort { $a->_date <=> $b->_date }
-    qsearch( 'cust_pay', { 'custnum' => $self->custnum } )
+  my $opt = ref($_[0]) ? shift : { @_ };
+
+  return $self->num_cust_pay unless wantarray || keys %$opt;
+
+  $opt->{'table'} = 'cust_pay';
+  $opt->{'hashref'}{'custnum'} = $self->custnum;
+
+  map { $_ } #behavior of sort undefined in scalar context
+    sort { $a->_date <=> $b->_date }
+      qsearch($opt);
+
 }
 
 =item num_cust_pay
@@ -3789,6 +3822,22 @@ sub num_cust_pay {
   my $sth = dbh->prepare($sql) or die dbh->errstr;
   $sth->execute($self->custnum) or die $sth->errstr;
   $sth->fetchrow_arrayref->[0];
+}
+
+=item unapplied_cust_pay
+
+Returns all the unapplied payments (see L<FS::cust_pay>) for this customer.
+
+=cut
+
+sub unapplied_cust_pay {
+  my $self = shift;
+
+  $self->cust_pay(
+    'extra_sql' => ' AND '. FS::cust_pay->unapplied_sql. ' > 0',
+    #@_
+  );
+
 }
 
 =item cust_pay_pkgnum

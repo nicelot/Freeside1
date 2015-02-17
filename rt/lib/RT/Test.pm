@@ -164,6 +164,8 @@ sub import {
 
     $class->set_config_wrapper;
 
+    $class->encode_output;
+
     my $screen_logger = $RT::Logger->remove( 'screen' );
     require Log::Dispatch::Perl;
     $RT::Logger->add( Log::Dispatch::Perl->new
@@ -417,6 +419,13 @@ sub set_config_wrapper {
     };
 }
 
+sub encode_output {
+    my $builder = Test::More->builder;
+    binmode $builder->output,         ":encoding(utf8)";
+    binmode $builder->failure_output, ":encoding(utf8)";
+    binmode $builder->todo_output,    ":encoding(utf8)";
+}
+
 sub bootstrap_db {
     my $self = shift;
     my %args = @_;
@@ -639,12 +648,7 @@ sub __init_logging {
         $filter = $SIG{__WARN__};
     }
     $SIG{__WARN__} = sub {
-        if ($filter) {
-            my $status = $filter->(@_);
-            if ($status and $status eq 'IGNORE') {
-                return; # pretend the bad dream never happened
-            }
-        }
+        $filter->(@_) if $filter;
         # Avoid reporting this anonymous call frame as the source of the warning.
         goto &$Test_NoWarnings_Catcher;
     };
@@ -824,9 +828,11 @@ sub create_ticket {
 
     if ( my $content = delete $args{'Content'} ) {
         $args{'MIMEObj'} = MIME::Entity->build(
-            From    => $args{'Requestor'},
-            Subject => $args{'Subject'},
-            Data    => $content,
+            From    => Encode::encode( "UTF-8", $args{'Requestor'} ),
+            Subject => RT::Interface::Email::EncodeToMIME( String => $args{'Subject'} ),
+            Type    => "text/plain",
+            Charset => "UTF-8",
+            Data    => Encode::encode( "UTF-8", $content ),
         );
     }
 
@@ -1462,7 +1468,8 @@ sub test_app {
     }
 
     require Plack::Middleware::Test::StashWarnings;
-    my $stashwarnings = Plack::Middleware::Test::StashWarnings->new;
+    my $stashwarnings = Plack::Middleware::Test::StashWarnings->new(
+        $ENV{'RT_TEST_WEB_HANDLER'} && $ENV{'RT_TEST_WEB_HANDLER'} eq 'inline' ? ( verbose => 0 ) : () );
     $app = $stashwarnings->wrap($app);
 
     if ($server_opt{basic_auth}) {
@@ -1595,8 +1602,6 @@ sub file_content {
     my %args = @_;
 
     $path = File::Spec->catfile( @$path ) if ref $path eq 'ARRAY';
-
-    Test::More::diag "reading content of '$path'" if $ENV{'TEST_VERBOSE'};
 
     open( my $fh, "<:raw", $path )
         or do {

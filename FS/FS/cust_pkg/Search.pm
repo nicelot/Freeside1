@@ -17,13 +17,15 @@ Valid parameters are
 
 =item agentnum
 
-=item magic
-
-on hold, active, inactive (or one-time charge), suspended, cancel (or cancelled)
-
 =item status
 
-on hold, active, inactive (or one-time charge), suspended, cancel (or cancelled)
+on hold, active, inactive (or one-time charge), suspended, canceled (or cancelled)
+
+=item magic
+
+Equivalent to "status", except that "canceled"/"cancelled" will exclude 
+packages that were changed into a new package with the same pkgpart (i.e.
+location or quantity changes).
 
 =item custom
 
@@ -109,6 +111,21 @@ Limit to packages whose locations have geocodes.
 =item location_geocode
 
 Limit to packages whose locations do not have geocodes.
+
+=item towernum
+
+Limit to packages associated with a svc_broadband, associated with a sector,
+associated with this towernum (or any of these, if it's an arrayref) (or NO
+towernum, if it's zero). This is an extreme niche case.
+
+=item 477part, 477rownum, date
+
+Limit to packages included in a specific row of one of the FCC 477 reports.
+'477part' is the section name (see L<FS::Report::FCC_477> methods), 'date'
+is the report as-of date (completely unrelated to the package setup/bill/
+other date fields), and '477rownum' is the row number of the report starting
+with zero. Row numbers have no inherent meaning, so this is useful only 
+for explaining a 477 report you've already run.
 
 =back
 
@@ -207,6 +224,19 @@ sub search {
 
     push @where, FS::cust_pkg->cancelled_sql();
 
+  }
+  
+  ### special case: "magic" is used in detail links from browse/part_pkg,
+  # where "cancelled" has the restriction "and not replaced with a package
+  # of the same pkgpart".  Be consistent with that.
+  ###
+
+  if ( $params->{'magic'} =~ /^cancell?ed$/ ) {
+    my $new_pkgpart = "SELECT pkgpart FROM cust_pkg AS cust_pkg_next ".
+                      "WHERE cust_pkg_next.change_pkgnum = cust_pkg.pkgnum";
+    # ...may not exist, if this was just canceled and not changed; in that
+    # case give it a "new pkgpart" that never equals the old pkgpart
+    push @where, "COALESCE(($new_pkgpart), 0) != cust_pkg.pkgpart";
   }
 
   ###
@@ -336,7 +366,7 @@ sub search {
   }
 
   ###
-  # parse country/state
+  # parse country/state/zip
   ###
   for (qw(state country)) { # parsing rules are the same for these
   if ( exists($params->{$_}) 
@@ -345,6 +375,9 @@ sub search {
       # XXX post-2.3 only--before that, state/country may be in cust_main
       push @where, "cust_location.$_ = '$1'";
     }
+  }
+  if ( exists($params->{zip}) ) {
+    push @where, "cust_location.zip = " . dbh->quote($params->{zip});
   }
 
   ###
@@ -418,6 +451,9 @@ sub search {
       "NOT (".FS::cust_pkg->onetime_sql . ")";
   }
   else {
+    my $exclude_change_from = 0;
+    my $exclude_change_to = 0;
+
     foreach my $field (qw( setup last_bill bill adjourn susp expire contract_end change_date cancel )) {
 
       next unless exists($params->{$field});
@@ -433,6 +469,27 @@ sub search {
 
       $orderby ||= "ORDER BY cust_pkg.$field";
 
+      if ( $field eq 'setup' ) {
+        $exclude_change_from = 1;
+      } elsif ( $field eq 'cancel' ) {
+        $exclude_change_to = 1;
+      } elsif ( $field eq 'change_date' ) {
+        # if we are given setup and change_date ranges, and the setup date
+        # falls in _both_ ranges, then include the package whether it was 
+        # a change or not
+        $exclude_change_from = 0;
+      }
+    }
+
+    if ($exclude_change_from) {
+      push @where, "change_pkgnum IS NULL";
+    }
+    if ($exclude_change_to) {
+      # a join might be more efficient here
+      push @where, "NOT EXISTS(
+        SELECT 1 FROM cust_pkg AS changed_to_pkg
+        WHERE cust_pkg.pkgnum = changed_to_pkg.change_pkgnum
+      )";
     }
   }
 
@@ -469,6 +526,60 @@ sub search {
                                 )
     )';
   
+  }
+
+  ##
+  # parse the extremely weird 'towernum' param
+  ##
+
+  if ($params->{towernum}) {
+    my $towernum = $params->{towernum};
+    $towernum = [ $towernum ] if !ref($towernum);
+    my $in = join(',', grep /^\d+$/, @$towernum);
+    if (length $in) {
+      # inefficient, but this is an obscure feature
+      eval "use FS::Report::Table";
+      FS::Report::Table->_init_tower_pkg_cache; # probably does nothing
+      push @where, "EXISTS(
+      SELECT 1 FROM tower_pkg_cache
+      WHERE tower_pkg_cache.pkgnum = cust_pkg.pkgnum
+        AND tower_pkg_cache.towernum IN ($in)
+      )"
+    }
+  }
+
+  ##
+  # parse the 477 report drill-down options
+  ##
+
+  if ($params->{'477part'} =~ /^([a-z]+)$/) {
+    my $section = $1;
+    my ($date, $rownum, $agentnum);
+    if ($params->{'date'} =~ /^(\d+)$/) {
+      $date = $1;
+    }
+    if ($params->{'477rownum'} =~ /^(\d+)$/) {
+      $rownum = $1;
+    }
+    if ($params->{'agentnum'} =~ /^(\d+)$/) {
+      $agentnum = $1;
+    }
+    if ($date and defined($rownum)) {
+      my $report = FS::Report::FCC_477->report($section,
+        'date'      => $date,
+        'agentnum'  => $agentnum,
+        'detail'    => 1
+      );
+      my $row = $report->[$rownum]
+        or die "row $rownum is past the end of the report";
+      my $pkgnums = $row->[-1] || '0';
+        # '0' so that if there are no pkgnums (empty string) it will create
+        # a valid query that returns nothing
+      warn "PKGNUMS:\n$pkgnums\n\n"; # XXX debug
+
+      # and this overrides everything
+      @where = ( "cust_pkg.pkgnum IN($pkgnums)" );
+    } # else we're missing some params, ignore the whole business
   }
 
   ##

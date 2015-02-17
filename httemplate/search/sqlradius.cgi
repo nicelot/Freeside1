@@ -13,17 +13,6 @@
 %   if ( $part_export->option('hide_data') ) {
 %     delete $efields{$_} foreach qw(acctinputoctets acctoutputoctets);
 %   }
-%   if ( $part_export->option('show_called_station') ) {
-%     $efields->Splice(1, 0,
-%       'calledstationid' => {
-%                              'name'   => 'Destination',
-%                              'attrib' => 'Called-Station-ID',
-%                              'fmt'    =>
-%                                sub { length($_[0]) ? shift : '&nbsp'; },
-%                              'align'  => 'left',
-%                            },
-%     );
-%   }
 
     <FONT CLASS="fsinnerbox-title">
       <% $part_export->exportname || $part_export->exporttype |h %>
@@ -313,10 +302,10 @@ my $duration_format = sub {
 
 my $octets_format = sub {
   my $octets = shift;
-  my $megs = $octets / 1048576;
-  sprintf('<B>%.3f</B>&nbsp;megs', $megs);
-  #my $gigs = $octets / 1073741824
-  #sprintf('<B>%.3f</B> gigabytes', $gigs);
+  #my $megs = $octets / 1048576;
+  #sprintf('<B>%.3f</B>&nbsp;megs', $megs);
+  my $gigs = $octets / 1073741824;
+  sprintf('<B>%.3f</B>&nbsp;gigs', $gigs);
 };
 
 ###
@@ -384,6 +373,37 @@ tie %fields, 'Tie::IxHash',
                                           },
                            align   => 'right',
                          },
+  'callingstationid'  => {
+                           name    => 'Source&nbsp;or&nbsp;MAC',
+                           attrib  => 'Calling-Station-Id',
+                           fmt     => sub {
+                             my $src = shift;
+                             if ( $src =~
+                                    /^\s*(([\dA-F]{2}[\-:]){5}[\dA-F]{2})/i ) {
+                               return $src. ' <span style="white-space: nowrap">('.
+                                        (Net::MAC::Vendor::lookup($1))->[0].
+                                      ')</span>';
+
+                             }
+                             length($src) ? $src : '&nbsp';
+                           },
+                           align   => 'right',
+                         },
+  'calledstationid'   => {
+                           name    => 'Destination',
+                           attrib  => 'Called-Station-ID',
+                           fmt     => sub {
+                             my $dst = shift;
+                             if ( $dst =~
+                                    /^\s*(([\dA-F]{2}[\-:]){5}[\dA-F]{2})/i ) {
+                               return $dst. ' <span style="white-space: nowrap">('.
+                                        (Net::MAC::Vendor::lookup($1))->[0].
+                                      ')</span>';
+                             }
+                             length($dst) ? $dst : '&nbsp';
+                           },
+                           align   => 'left',
+                       },
   'acctstarttime'     => {
                            name    => 'Start&nbsp;time',
                            attrib  => 'Acct-Start-Time',

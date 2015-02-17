@@ -153,6 +153,7 @@ tie my %rights, 'Tie::IxHash',
     'Waive setup fee', #NEW
     'View appointments', #NEWNEW
     'Make appointment',
+    'View package definition costs', #NEWNEW
   ],
   
   ###
@@ -358,6 +359,9 @@ tie my %rights, 'Tie::IxHash',
     'Edit package definition costs',
 
     'Bulk edit package definitions',
+
+    'Edit FCC report configuration',
+    { rightname => 'Edit FCC report configuration for all agents', global=>1 },
 
     'Edit CDR rates',
     #{ rightname=>'Edit global CDR rates', global=>1, },

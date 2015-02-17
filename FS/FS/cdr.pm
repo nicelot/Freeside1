@@ -368,9 +368,9 @@ to inspect other field.
 sub is_tollfree {
   my $self = shift;
   my $field = scalar(@_) ? shift : 'dst';
-  my $country = $conf->config('tollfree-country');
+  my $country = $conf->config('tollfree-country') || '';
   if ( $country eq 'AU' ) { 
-    ( $self->$field() =~ /^(\+?61)?1800/ ) ? 1 : 0;
+    ( $self->$field() =~ /^(\+?61)?(1800|1300)/ ) ? 1 : 0;
   } elsif ( $country eq 'NZ' ) { 
     ( $self->$field() =~ /^(\+?64)?(800|508)/ ) ? 1 : 0;
   } else { #NANPA (US/Canaada)

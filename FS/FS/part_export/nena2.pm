@@ -15,9 +15,15 @@ my %upload_targets;
 
 tie %options, 'Tie::IxHash', (
   'company_name'    => {  label => 'Company name for header record',
-                          type  => 'text'
+                          type  => 'text',
                        },
   'company_id'      => {  label => 'NENA company ID',
+                          type  => 'text',
+                       },
+  'customer_code'   => {  label => 'Customer code',
+                          type  => 'text',
+                       },
+  'area_code'       => {  label => 'Default area code for 7 digit numbers',
                           type  => 'text',
                        },
   'prefix'          => {  label => 'File name prefix',
@@ -163,15 +169,6 @@ my %function_code = (
 );
 
 sub immediate {
-  local $@;
-  eval "use Geo::StreetAddress::US";
-  if ($@) {
-    if ($@ =~ /^Can't locate/) {
-      return "Geo::StreetAddress::US must be installed to use the NENA2 export.";
-    } else {
-      die $@;
-    }
-  }
 
   # validate some things
   my ($self, $action, $svc) = @_;
@@ -203,6 +200,15 @@ sub create_item {
 }
 
 sub data {
+  local $@;
+  eval "use Geo::StreetAddress::US";
+  if ($@) {
+    if ($@ =~ /^Can't locate/) {
+      return "Geo::StreetAddress::US must be installed to use the NENA2 export.";
+    } else {
+      die $@;
+    }
+  }
   # generate the entire record here.  reconciliation of multiple updates to 
   # the same service can be done at process time.
   my $self = shift;
@@ -215,12 +221,18 @@ sub data {
   my $cust_location = FS::cust_location->by_key($locationnum);
 
   # initialize with empty strings
-  my %hash = map { $_ => '' } $item_format->names;
+  my %hash = map { $_ => '' } @{ $item_format->names };
 
   $hash{function_code} = $function_code{$action};
-
-  # phone number 
-  $svc->phonenum =~ /^(\d{3})(\d*)$/;
+  
+  # Add default area code if phonenum is 7 digits
+  my $phonenum = $svc->phonenum;
+  if ($self->option('area_code') =~ /^\d{3}$/ && $phonenum =~ /^\d{7}$/ ){
+  $phonenum = $self->option('area_code'). $svc->phonenum;
+  }
+ 
+  # phone number
+  $phonenum =~ /^(\d{3})(\d*)$/;
   $hash{npa} = $1;
   $hash{calling_number} = $2;
 
@@ -247,11 +259,19 @@ sub data {
   } else {
     $hash{location} = $cust_location->address2;
   }
-  $hash{location}             = $location_hash->{address2};
 
   # customer name and class
   $hash{customer_name} = $svc->phone_name_or_cust;
   $hash{class_of_service} = $svc->e911_class;
+  if (!$hash{class_of_service}) {
+    # then guess
+    my $cust_main = $svc->cust_main;
+    if ($cust_main->company) {
+      $hash{class_of_service} = '2';
+    } else {
+      $hash{class_of_service} = '1';
+    }
+  }
   $hash{type_of_service}  = $svc->e911_type || '0';
 
   $hash{exchange} = '';
@@ -277,13 +297,11 @@ sub data {
   # so we can't comply.  NENA 3 fixed this...
 
   $hash{company_id} = $self->option('company_id');
+  $hash{customer_code} = $self->option('customer_code') || '';
   $hash{source_id} = $initial_load_hack ? 'C' : ' ';
 
-  @hash{'zip', 'zip_'} = split('-', $cust_location->zip);
-  
-  # $hash{customer_code} is supposed to "uniquely identify a customer" but 
-  # they give us 3 alphanumeric characters.  Not sure how that works.
-
+  @hash{'zip_code', 'zip_4'} = split('-', $cust_location->zip);
+ 
   $hash{x_coordinate} = $cust_location->longitude;
   $hash{y_coordinate} = $cust_location->latitude;
   # $hash{z_coordinate} = $cust_location->altitude; # not implemented, sadly

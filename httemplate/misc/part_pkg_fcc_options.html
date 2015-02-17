@@ -90,8 +90,19 @@
     <& .checkbox, 'is_voip' &>
     <LABEL FOR="is_voip">This package provides VoIP telephone service</LABEL>
     <FIELDSET ID="voip">
-      <LABEL FOR="voip_ott">Do you also provide last-mile connectivity?</LABEL>
-      <& .checkbox, 'voip_ott' &>
+      <LABEL FOR="voip_sessions">Number of simultaneous calls possible</LABEL>
+      <INPUT NAME="voip_sessions" ID="voip_sessions">
+      <BR>
+      <& .checkbox, 'voip_lastmile' &>
+      <LABEL FOR="voip_lastmile">Do you also provide last-mile connectivity?</LABEL>
+    </FIELDSET>
+  </P>
+  <P>
+    <& .checkbox, 'is_mobile' &>
+    <LABEL FOR="is_mobile">This package provides mobile telephone service</LABEL>
+    <FIELDSET ID="mobile">
+      <LABEL FOR="mobile_direct">Do you bill the customer directly?</LABEL>
+      <& .checkbox, 'mobile_direct' &>
     </FIELDSET>
   </P>
   <DIV WIDTH="100%" STYLE="text-align:center">
@@ -103,8 +114,8 @@
 // this form is invoked as a popup; the current values of the parent 
 // object are in the form field ID passed as the 'id' param
 
-var parent_id = window.parent.document.getElementById('<% $parent_id %>');
-var curr_values = JSON.parse(window.parent_id.value);
+var parent_input = window.parent.document.getElementById('<% $parent_id %>');
+var curr_values = JSON.parse(window.parent_input.value);
 var form = document.forms['fcc_option_form'];
 var media_types = <% encode_json($media_types) %>
 var technology_labels = <% encode_json($technology_labels) %>
@@ -129,6 +140,9 @@ function save_changes() {
   var form = document.forms['fcc_option_form'];
   var data = {};
   for (var i = 0; i < form.elements.length; i++) {
+    if (form.elements[i].type == 'submit')
+      continue;
+
     // quick and dirty test for whether the element is displayed
     if (form.elements[i].clientHeight > 0) {
       if (form.elements[i].type == 'checkbox') {
@@ -140,7 +154,9 @@ function save_changes() {
       }
     }
   }
-  parent_id.value = JSON.stringify(data);
+  parent_input.value = JSON.stringify(data);
+  // update the display
+  parent.show_fcc_options(parent_input.id);
   parent.cClick(); //overlib
 }
 
@@ -161,7 +177,7 @@ function enable_fieldset(fieldset_id) {
   // set up all event handlers
   addEventListener(form, 'submit', save_changes);
 
-  var sections = [ 'broadband', 'phone', 'voip' ];
+  var sections = [ 'broadband', 'phone', 'voip', 'mobile' ];
   for(var i = 0; i < sections.length; i++) {
     var toggle = form.elements['is_'+sections[i]];
     addEventListener(toggle, 'change', enable_fieldset(sections[i]));
@@ -172,6 +188,11 @@ function enable_fieldset(fieldset_id) {
     function () {
       form.elements['phone0'].disabled = (this.value == 1);
       form.elements['phone1'].disabled = (this.value == '');
+    }
+  );
+  addEventListener(form.elements['is_phone'], 'change', 
+    function() {
+      form.elements['phone_wholesale'].dispatchEvent( new Event('change') );
     }
   );
 
